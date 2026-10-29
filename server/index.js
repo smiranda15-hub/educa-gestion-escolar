@@ -366,6 +366,37 @@ async function route(request, response) {
     await logAudit(user.school_id, user.id, body.active ? 'course_reactivated' : 'course_archived')
     return json(response, 200, { id: courseStatusMatch[1], active: body.active })
   }
+  const courseHistoryMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/history$/i)
+  if (courseHistoryMatch && method === 'GET') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar el historial del curso.' })
+    const course = await db.get('SELECT id, name, grade, academic_year AS "academicYear", is_active AS "isActive" FROM courses WHERE id = ? AND school_id = ?', courseHistoryMatch[1], user.school_id)
+    if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+    const kind = String(url.searchParams.get('kind') || '')
+    const limit = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50))
+    const offset = Math.min(1_000_000, Math.max(0, Number.parseInt(url.searchParams.get('offset') || '0', 10) || 0))
+    if (kind === 'attendance') {
+      const total = Number((await db.get('SELECT COUNT(*) AS count FROM attendance_records WHERE school_id = ? AND course_id = ?', user.school_id, course.id)).count)
+      const records = await db.all(`SELECT st.full_name AS "studentName", st.grade, ar.attendance_date AS "attendanceDate",
+        ar.status, ar.marked_at AS "markedAt", marker.full_name AS "markedBy"
+        FROM attendance_records ar JOIN students st ON st.id = ar.student_id JOIN users marker ON marker.id = ar.marked_by
+        WHERE ar.school_id = ? AND ar.course_id = ?
+        ORDER BY ar.attendance_date DESC, st.full_name LIMIT ? OFFSET ?`, user.school_id, course.id, limit, offset)
+      return json(response, 200, { course, kind, records, total, limit, offset })
+    }
+    if (kind === 'grades') {
+      const total = Number((await db.get(`SELECT COUNT(*) AS count FROM student_grades sg JOIN grade_assessments ga ON ga.id = sg.assessment_id
+        WHERE ga.school_id = ? AND ga.course_id = ?`, user.school_id, course.id)).count)
+      const records = await db.all(`SELECT st.full_name AS "studentName", st.grade, ga.title AS "assessmentTitle",
+        ga.subject, ga.period, sg.score, ga.max_score AS "maxScore", sg.comment,
+        sg.updated_at AS "updatedAt", editor.full_name AS "updatedBy"
+        FROM student_grades sg JOIN grade_assessments ga ON ga.id = sg.assessment_id
+        JOIN students st ON st.id = sg.student_id JOIN users editor ON editor.id = sg.updated_by
+        WHERE ga.school_id = ? AND ga.course_id = ?
+        ORDER BY sg.updated_at DESC, st.full_name LIMIT ? OFFSET ?`, user.school_id, course.id, limit, offset)
+      return json(response, 200, { course, kind, records: records.map(record => ({ ...record, score: Number(record.score), maxScore: Number(record.maxScore) })), total, limit, offset })
+    }
+    return json(response, 400, { error: 'Selecciona un tipo de historial válido.' })
+  }
   const courseTeacherMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/teachers$/i)
   if (courseTeacherMatch && method === 'POST') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para asignar docentes.' })
