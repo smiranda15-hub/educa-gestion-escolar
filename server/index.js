@@ -11,6 +11,10 @@ const secureCookie = process.env.NODE_ENV === 'production' ? '; Secure' : ''
 const sessionTtl = 8 * 60 * 60 * 1000
 const loginAttempts = new Map()
 const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
+const stateChangingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const configuredOrigins = new Set((process.env.EDUCA_ALLOWED_ORIGINS || '').split(',').map(value => {
+  try { return new URL(value.trim()).origin } catch { return '' }
+}).filter(Boolean))
 const json = (response, status, body, headers = {}) => {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', ...headers })
   response.end(JSON.stringify(body))
@@ -76,6 +80,17 @@ const verifyPassword = async (password, stored) => {
 }
 const cookieToken = request => request.headers.cookie?.split(';').map(part => part.trim()).find(part => part.startsWith('educa_session='))?.slice('educa_session='.length) || ''
 const hashToken = token => createHash('sha256').update(token).digest('hex')
+const requestOriginAllowed = request => {
+  const rawOrigin = request.headers.origin
+  if (!rawOrigin || rawOrigin === 'null') return false
+  let origin
+  try { origin = new URL(rawOrigin).origin } catch { return false }
+  if (configuredOrigins.has(origin)) return true
+  const host = String(request.headers['x-forwarded-host'] || request.headers.host || '').split(',')[0].trim()
+  const protocol = String(request.headers['x-forwarded-proto'] || (process.env.NODE_ENV === 'production' ? 'https' : 'http')).split(',')[0].trim().toLowerCase()
+  if (!host || !['http', 'https'].includes(protocol)) return false
+  return origin === `${protocol}://${host}`
+}
 const getSession = async request => {
   const token = cookieToken(request)
   if (!token || token.length > 200) return null
@@ -90,6 +105,7 @@ const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
   const method = request.method || 'GET'
+  if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
   if (method === 'GET' && url.pathname === '/api/auth/setup-status') {
@@ -174,6 +190,31 @@ async function route(request, response) {
   }
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+
+  if (url.pathname === '/api/audit-log' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar la bitácora.' })
+    const action = String(url.searchParams.get('action') || '').trim().slice(0, 100).toLowerCase()
+    const from = String(url.searchParams.get('from') || '')
+    const to = String(url.searchParams.get('to') || '')
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50))
+    const offset = Math.min(100_000, Math.max(0, Number(url.searchParams.get('offset')) || 0))
+    if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) return json(response, 400, { error: 'El rango de fechas no es válido.' })
+    const clauses = ['a.school_id = ?']
+    const params = [user.school_id]
+    if (action) { clauses.push('LOWER(a.action) LIKE ?'); params.push(`%${action}%`) }
+    if (from) { clauses.push('a.created_at >= ?'); params.push(`${from} 00:00:00`) }
+    if (to) {
+      const exclusiveEnd = new Date(`${to}T00:00:00.000Z`)
+      exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1)
+      clauses.push('a.created_at < ?'); params.push(`${exclusiveEnd.toISOString().slice(0, 10)} 00:00:00`)
+    }
+    const where = clauses.join(' AND ')
+    const total = Number((await db.get(`SELECT COUNT(*) AS count FROM audit_log a WHERE ${where}`, ...params)).count)
+    const entries = await db.all(`SELECT a.id, a.action, a.created_at AS "createdAt", COALESCE(u.full_name, 'Cuenta eliminada') AS "actorName", u.email AS "actorEmail"
+      FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id AND u.school_id = a.school_id
+      WHERE ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, ...params, limit, offset)
+    return json(response, 200, { entries, total, limit, offset })
+  }
 
   if (url.pathname === '/api/school/settings' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede configurar el colegio.' })

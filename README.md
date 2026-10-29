@@ -27,6 +27,7 @@ La base SQLite se crea en `data/educa.sqlite` de forma automática. `EDUCA_DB_PA
 2. En el proyecto Railway, usa **New → Database → PostgreSQL** para agregar la base administrada.
 3. En el servicio de la aplicación, agrega una referencia `DATABASE_URL` a la variable `DATABASE_URL` del servicio PostgreSQL. No copies credenciales al código.
 4. En las variables del servicio de la aplicación configura `EDUCA_SETUP_KEY` con un secreto aleatorio largo. También configura `NODE_ENV=production`.
+   Si usas un dominio personalizado o un proxy que cambie el host/protocolo, configura `EDUCA_ALLOWED_ORIGINS` con los orígenes HTTPS permitidos, separados por comas (por ejemplo, `https://colegio.example.edu`).
 5. En configuración de despliegue establece el comando de build `npm run build` y de inicio `npm start`. El servidor usa el puerto `PORT` que asigna Railway y sirve el frontend compilado y la API desde el mismo servicio.
 6. Genera un dominio público para el servicio de la aplicación. Al abrirlo por primera vez, usa la pantalla inicial para crear el colegio y el primer administrador. Después de completar la configuración, elimina `EDUCA_SETUP_KEY` de las variables y redepliega.
 
@@ -36,10 +37,11 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 
 - Instituciones, usuario inicial, sesiones y estudiantes se guardan en SQLite local o PostgreSQL cuando `DATABASE_URL` está configurada.
 - Las contraseñas se almacenan usando scrypt con sal; la cookie de sesión es HttpOnly, SameSite Strict y tiene una duración limitada.
+- Las solicitudes que modifican datos se validan con `Origin` contra el origen recibido por el servidor o la lista explícita `EDUCA_ALLOWED_ORIGINS`; sin un origen válido, el backend las rechaza.
 - Cada usuario autenticado puede cambiar su contraseña desde el botón de perfil; se verifica la contraseña actual, se registran los cambios y se revocan las demás sesiones de la cuenta.
-- La API filtra los estudiantes por el colegio de la sesión y registra acciones iniciales, accesos y altas en la bitácora.
+- La API filtra los estudiantes por el colegio de la sesión y registra acciones administrativas y académicas en la bitácora. El administrador puede consultar la actividad desde **Bitácora**, filtrarla por acción o fecha y recorrerla por páginas; cada consulta queda limitada al colegio de su sesión.
 - El navegador no contiene usuarios ni contraseñas precargadas. El primer colegio lo crea quien opera el sistema.
-- La aplicación usa PostgreSQL cuando Railway provee `DATABASE_URL`; el entorno local usa SQLite. Antes de operar con menores, completa recuperación y cambio de contraseña, protección CSRF/origen, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
+- La aplicación usa PostgreSQL cuando Railway provee `DATABASE_URL`; el entorno local usa SQLite. Antes de operar con menores, completa recuperación por correo, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
 
 ### Usuarios y portales por rol
 
