@@ -407,6 +407,7 @@ async function route(request, response) {
       attendance: ['admin', 'secretaria', 'docente'],
       grades: ['admin', 'secretaria', 'docente'],
       enrollments: ['admin', 'secretaria'],
+      guardians: ['admin', 'secretaria'],
     }
     if (!allowedRoles[type]) return json(response, 400, { error: 'Selecciona un tipo de reporte válido.' })
     if (!allowedRoles[type].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a este reporte.' })
@@ -424,7 +425,22 @@ async function route(request, response) {
     }
     const params = [user.school_id]
     let sql = ''
-    if (type === 'students') {
+    if (type === 'guardians') {
+      sql = `SELECT st.guardian_name AS "Acudiente", st.guardian_phone AS "Teléfono",
+        st.full_name AS "Estudiante asociado", st.grade AS "Grado", st.status AS "Estado del estudiante"
+        FROM students st WHERE st.school_id = ? AND trim(COALESCE(st.guardian_name, '')) <> ''`
+      if (selectedCourse) {
+        sql += ` AND EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id
+          AND se.student_id = st.id AND se.course_id = ?)`
+        params.push(selectedCourse.id)
+      }
+      if (academicYear) {
+        sql += ` AND EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id
+          AND se.student_id = st.id AND se.academic_year = ?)`
+        params.push(academicYear)
+      }
+      sql += ' ORDER BY st.guardian_name, st.full_name LIMIT 5001'
+    } else if (type === 'students') {
       sql = `SELECT st.full_name AS "Estudiante", st.grade AS "Grado", st.status AS "Estado"
         FROM students st WHERE st.school_id = ?`
       if (selectedCourse) { sql += ' AND (st.grade = ? OR EXISTS (SELECT 1 FROM student_enrollments se WHERE se.student_id = st.id AND se.course_id = ? AND se.status = \'Activa\'))'; params.push(selectedCourse.grade, selectedCourse.id) }
