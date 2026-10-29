@@ -10,6 +10,7 @@ const port = Number(process.env.PORT || process.env.API_PORT || 3001)
 const secureCookie = process.env.NODE_ENV === 'production' ? '; Secure' : ''
 const sessionTtl = 8 * 60 * 60 * 1000
 const loginAttempts = new Map()
+const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
 const json = (response, status, body, headers = {}) => {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', ...headers })
   response.end(JSON.stringify(body))
@@ -134,7 +135,49 @@ async function route(request, response) {
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
 
+  if (url.pathname === '/api/users' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede consultar las cuentas del colegio.' })
+    const users = await db.all(`SELECT id, email, full_name AS name, role, is_active AS active, created_at AS createdAt
+      FROM users WHERE school_id = ? ORDER BY full_name`, user.school_id)
+    return json(response, 200, { users })
+  }
+  if (url.pathname === '/api/users' && method === 'POST') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede crear cuentas.' })
+    const body = await readBody(request)
+    const name = String(body.name || '').trim()
+    const email = String(body.email || '').trim().toLowerCase()
+    const role = String(body.role || '')
+    const password = String(body.password || '')
+    if (name.length < 2 || name.length > 100) return json(response, 400, { error: 'Escribe un nombre entre 2 y 100 caracteres.' })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json(response, 400, { error: 'Ingresa un correo válido.' })
+    if (!accountRoles.has(role)) return json(response, 400, { error: 'El rol seleccionado no es válido.' })
+    if (password.length < 12 || password.length > 128) return json(response, 400, { error: 'La contraseña inicial debe tener entre 12 y 128 caracteres.' })
+    const id = randomUUID()
+    try {
+      await db.run('INSERT INTO users (id, school_id, email, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)', id, user.school_id, email, name, await hashPassword(password), role)
+    } catch (error) {
+      if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe una cuenta con ese correo en el colegio.' })
+      throw error
+    }
+    await logAudit(user.school_id, user.id, 'user_created')
+    return json(response, 201, { user: { id, email, name, role, active: 1 } })
+  }
+  const userStatusMatch = url.pathname.match(/^\/api\/users\/([0-9a-f-]{36})\/status$/i)
+  if (userStatusMatch && method === 'PATCH') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede cambiar el estado de una cuenta.' })
+    const targetId = userStatusMatch[1]
+    if (targetId === user.id) return json(response, 400, { error: 'No puedes desactivar tu propia cuenta.' })
+    const body = await readBody(request)
+    if (typeof body.active !== 'boolean') return json(response, 400, { error: 'Indica el nuevo estado de la cuenta.' })
+    const result = await db.run('UPDATE users SET is_active = ? WHERE id = ? AND school_id = ?', body.active ? 1 : 0, targetId, user.school_id)
+    if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos esa cuenta en tu colegio.' })
+    if (!body.active) await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
+    await logAudit(user.school_id, user.id, body.active ? 'user_activated' : 'user_deactivated')
+    return json(response, 200, { id: targetId, active: body.active })
+  }
+
   if (url.pathname === '/api/students' && method === 'GET') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'El acceso a la lista completa de estudiantes está limitado a administración y secretaría.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
     const status = url.searchParams.get('status') || 'Todos'
     const students = await db.all(`SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS createdAt
