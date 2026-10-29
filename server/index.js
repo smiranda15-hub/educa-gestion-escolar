@@ -116,6 +116,21 @@ async function route(request, response) {
     if (token) await db.run('DELETE FROM sessions WHERE token_hash = ?', hashToken(token))
     return json(response, 200, { loggedOut: true }, { 'Set-Cookie': sessionCookie('', 0) })
   }
+  if (!url.pathname.startsWith('/api/')) {
+    const distRoot = resolve('./dist')
+    let requestedPath
+    try { requestedPath = decodeURIComponent(url.pathname) } catch { return json(response, 400, { error: 'Ruta inválida.' }) }
+    let filePath = resolve(distRoot, `.${requestedPath}`)
+    if (filePath !== distRoot && !filePath.startsWith(`${distRoot}${sep}`)) return json(response, 403, { error: 'Ruta no permitida.' })
+    if (!extname(filePath)) filePath = resolve(distRoot, 'index.html')
+    try {
+      const content = await readFile(filePath)
+      const contentType = ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' })[extname(filePath)] || 'application/octet-stream'
+      response.writeHead(200, { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin' })
+      response.end(content)
+    } catch { json(response, 404, { error: 'Recurso no encontrado.' }) }
+    return
+  }
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
 
@@ -148,18 +163,7 @@ async function route(request, response) {
     return json(response, 201, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS createdAt FROM students WHERE id = ?', id) })
   }
   if (url.pathname.startsWith('/api/')) return json(response, 404, { error: 'Ruta no encontrada.' })
-  const distRoot = resolve('./dist')
-  let requestedPath
-  try { requestedPath = decodeURIComponent(url.pathname) } catch { return json(response, 400, { error: 'Ruta inválida.' }) }
-  let filePath = resolve(distRoot, `.${requestedPath}`)
-  if (filePath !== distRoot && !filePath.startsWith(`${distRoot}${sep}`)) return json(response, 403, { error: 'Ruta no permitida.' })
-  if (!extname(filePath)) filePath = resolve(distRoot, 'index.html')
-  try {
-    const content = await readFile(filePath)
-    const contentType = ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' })[extname(filePath)] || 'application/octet-stream'
-    response.writeHead(200, { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin' })
-    response.end(content)
-  } catch { json(response, 404, { error: 'Recurso no encontrado.' }) }
+  return json(response, 404, { error: 'Recurso no encontrado.' })
 }
 
 const server = createServer((request, response) => {
