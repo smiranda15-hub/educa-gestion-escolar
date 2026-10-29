@@ -146,6 +146,8 @@ async function route(request, response) {
     if (!validDate(date)) return json(response, 400, { error: 'La fecha del panel no es válida.' })
     const activeStudents = Number((await db.get("SELECT COUNT(*) AS count FROM students WHERE school_id = ? AND status = 'Activo'", user.school_id)).count)
     const courses = Number((await db.get('SELECT COUNT(*) AS count FROM courses WHERE school_id = ? AND is_active = 1', user.school_id)).count)
+    const pendingEnrollments = Number((await db.get(`SELECT COUNT(*) AS count FROM enrollment_requests WHERE school_id = ?
+      AND status IN ('Solicitada','En revisión','Pendiente documentos')`, user.school_id)).count)
     const rows = await db.all(`SELECT status, COUNT(*) AS count FROM attendance_records
       WHERE school_id = ? AND attendance_date = ? GROUP BY status`, user.school_id, date)
     const attendance = { total: 0, present: 0, absent: 0, late: 0, justified: 0, rate: null }
@@ -173,7 +175,7 @@ async function route(request, response) {
       const values = byDate.get(dayKey) || { total: 0, attended: 0 }
       return { date: dayKey, label: new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', timeZone: 'UTC' }).format(day), total: values.total, rate: values.total ? Math.round((values.attended / values.total) * 1000) / 10 : null }
     })
-    return json(response, 200, { date, activeStudents, courses, attendance, weeklyAttendance })
+    return json(response, 200, { date, activeStudents, courses, pendingEnrollments, attendance, weeklyAttendance })
   }
 
   if (url.pathname === '/api/users' && method === 'GET') {
@@ -584,6 +586,118 @@ async function route(request, response) {
     })
     await logAudit(user.school_id, user.id, 'grade_records_saved')
     return json(response, 200, { saved: records.length })
+  }
+
+  if (url.pathname === '/api/enrollments' && method === 'GET') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar matrículas.' })
+    const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
+    const status = String(url.searchParams.get('status') || 'Todos')
+    const requests = await db.all(`SELECT id, student_id AS "studentId", student_name AS "studentName", document,
+      grade_requested AS "gradeRequested", academic_year AS "academicYear", guardian_name AS "guardianName",
+      guardian_phone AS "guardianPhone", pending_documents AS "pendingDocuments", notes, status,
+      created_at AS "createdAt", updated_at AS "updatedAt"
+      FROM enrollment_requests WHERE school_id = ? AND (? = 'Todos' OR status = ?)
+      AND (student_name LIKE ? OR document LIKE ? OR grade_requested LIKE ?) ORDER BY created_at DESC LIMIT 500`,
+      user.school_id, status, status, search, search, search)
+    return json(response, 200, { requests })
+  }
+  if (url.pathname === '/api/enrollments' && method === 'POST') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear solicitudes de matrícula.' })
+    const body = await readBody(request)
+    const studentName = String(body.studentName || '').trim()
+    const document = String(body.document || '').trim()
+    const gradeRequested = String(body.gradeRequested || '').trim()
+    const academicYear = String(body.academicYear || '').trim()
+    const guardianName = String(body.guardianName || '').trim()
+    const guardianPhone = String(body.guardianPhone || '').trim()
+    const pendingDocuments = (Array.isArray(body.pendingDocuments) ? body.pendingDocuments : String(body.pendingDocuments || '').split(','))
+      .map(item => String(item).trim()).filter(Boolean).slice(0, 20).join('\n')
+    const notes = String(body.notes || '').trim()
+    if (studentName.length < 2 || studentName.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(document) || gradeRequested.length < 2 || gradeRequested.length > 40 || !/^\d{4}-\d{4}$/.test(academicYear) || guardianName.length < 2 || guardianName.length > 100 || guardianPhone.length > 25 || pendingDocuments.length > 1000 || notes.length > 1000) return json(response, 400, { error: 'Revisa los datos del estudiante, acudiente, grado y año lectivo.' })
+    const duplicate = await db.get(`SELECT id FROM enrollment_requests WHERE school_id = ? AND document = ? AND academic_year = ?
+      AND status IN ('Solicitada','En revisión','Pendiente documentos','Aprobada')`, user.school_id, document, academicYear)
+    if (duplicate) return json(response, 409, { error: 'Ya existe una solicitud en curso para ese documento y año lectivo.' })
+    const id = randomUUID()
+    await db.run(`INSERT INTO enrollment_requests (id, school_id, student_name, document, grade_requested, academic_year,
+      guardian_name, guardian_phone, pending_documents, notes, status, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Solicitada', ?, ?)`, id, user.school_id, studentName, document, gradeRequested, academicYear, guardianName, guardianPhone, pendingDocuments, notes, user.id, user.id)
+    await logAudit(user.school_id, user.id, 'enrollment_request_created')
+    return json(response, 201, { id, status: 'Solicitada' })
+  }
+  const enrollmentRequestMatch = url.pathname.match(/^\/api\/enrollments\/([0-9a-f-]{36})$/i)
+  if (enrollmentRequestMatch && method === 'PATCH') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para procesar matrículas.' })
+    const id = enrollmentRequestMatch[1]
+    const requestRecord = await db.get(`SELECT * FROM enrollment_requests WHERE id = ? AND school_id = ?`, id, user.school_id)
+    if (!requestRecord) return json(response, 404, { error: 'No encontramos esa solicitud en este colegio.' })
+    const body = await readBody(request)
+    const statuses = new Set(['Solicitada', 'En revisión', 'Pendiente documentos', 'Aprobada', 'Rechazada'])
+    const status = String(body.status || '')
+    const pendingDocuments = (Array.isArray(body.pendingDocuments) ? body.pendingDocuments : String(body.pendingDocuments || '').split(','))
+      .map(item => String(item).trim()).filter(Boolean).slice(0, 20).join('\n')
+    const notes = String(body.notes || '').trim()
+    if (!statuses.has(status) || pendingDocuments.length > 1000 || notes.length > 1000) return json(response, 400, { error: 'Revisa el estado, los documentos pendientes y la observación.' })
+    if (requestRecord.status === 'Aprobada' && status !== 'Aprobada') return json(response, 409, { error: 'Una matrícula aprobada no se revierte desde la solicitud; registra un retiro o traslado para conservar el historial.' })
+    if (status !== 'Aprobada') {
+      await db.run(`UPDATE enrollment_requests SET status = ?, pending_documents = ?, notes = ?, updated_by = ?, updated_at = ?
+        WHERE id = ? AND school_id = ?`, status, pendingDocuments, notes, user.id, new Date().toISOString(), id, user.school_id)
+      await logAudit(user.school_id, user.id, 'enrollment_request_updated')
+      return json(response, 200, { id, status })
+    }
+    const course = await db.get(`SELECT id FROM courses WHERE school_id = ? AND grade = ? AND academic_year = ? AND is_active = 1`, user.school_id, requestRecord.grade_requested, requestRecord.academic_year)
+    if (!course) return json(response, 409, { error: 'Crea primero el curso activo del grado y año solicitados para poder aprobar la matrícula.' })
+    let student = await db.get('SELECT id FROM students WHERE school_id = ? AND document = ?', user.school_id, requestRecord.document)
+    const studentId = student?.id || randomUUID()
+    if (await db.get("SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'", user.school_id, studentId, requestRecord.academic_year)) return json(response, 409, { error: 'El estudiante ya tiene una matrícula activa para ese año lectivo.' })
+    const enrollmentId = randomUUID()
+    const today = new Date().toISOString().slice(0, 10)
+    await db.transaction(async tx => {
+      if (student) await tx.run(`UPDATE students SET full_name = ?, grade = ?, guardian_name = ?, guardian_phone = ?, status = 'Activo'
+        WHERE id = ? AND school_id = ?`, requestRecord.student_name, requestRecord.grade_requested, requestRecord.guardian_name, requestRecord.guardian_phone, studentId, user.school_id)
+      else await tx.run(`INSERT INTO students (id, school_id, full_name, document, grade, guardian_name, guardian_phone, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'Activo')`, studentId, user.school_id, requestRecord.student_name, requestRecord.document, requestRecord.grade_requested, requestRecord.guardian_name, requestRecord.guardian_phone)
+      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, status, start_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, enrollmentId, user.school_id, studentId, course.id, requestRecord.academic_year, today, notes, user.id)
+      await tx.run(`UPDATE enrollment_requests SET student_id = ?, status = 'Aprobada', pending_documents = ?, notes = ?, updated_by = ?, updated_at = ?
+        WHERE id = ? AND school_id = ?`, studentId, pendingDocuments, notes, user.id, new Date().toISOString(), id, user.school_id)
+    })
+    await logAudit(user.school_id, user.id, 'enrollment_approved')
+    return json(response, 200, { id, studentId, enrollmentId, status: 'Aprobada' })
+  }
+  if (url.pathname === '/api/enrollments/history' && method === 'GET') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar historial de matrículas.' })
+    const records = await db.all(`SELECT se.id, se.student_id AS "studentId", st.full_name AS "studentName", st.document,
+      st.grade, se.course_id AS "courseId", c.name AS "courseName", se.academic_year AS "academicYear",
+      se.status, se.start_date AS "startDate", se.end_date AS "endDate", se.notes
+      FROM student_enrollments se JOIN students st ON st.id = se.student_id
+      LEFT JOIN courses c ON c.id = se.course_id
+      WHERE se.school_id = ? ORDER BY se.academic_year DESC, st.full_name, se.start_date DESC LIMIT 1000`, user.school_id)
+    return json(response, 200, { records })
+  }
+  const enrollmentTransferMatch = url.pathname.match(/^\/api\/enrollments\/history\/([0-9a-f-]{36})\/transfer$/i)
+  if (enrollmentTransferMatch && method === 'POST') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden trasladar estudiantes.' })
+    const body = await readBody(request)
+    const destinationCourseId = String(body.courseId || '')
+    const effectiveDate = String(body.effectiveDate || '')
+    const notes = String(body.notes || '').trim()
+    if (!validDate(effectiveDate) || notes.length > 1000) return json(response, 400, { error: 'Indica una fecha válida y una observación de máximo 1000 caracteres.' })
+    const current = await db.get(`SELECT id, student_id AS "studentId", course_id AS "courseId", academic_year AS "academicYear"
+      FROM student_enrollments WHERE id = ? AND school_id = ? AND status = 'Activa'`, enrollmentTransferMatch[1], user.school_id)
+    if (!current) return json(response, 404, { error: 'No encontramos una matrícula activa para trasladar.' })
+    const destination = await db.get(`SELECT id, grade, academic_year AS "academicYear" FROM courses
+      WHERE id = ? AND school_id = ? AND is_active = 1`, destinationCourseId, user.school_id)
+    if (!destination || destination.academicYear !== current.academicYear) return json(response, 400, { error: 'El curso destino debe estar activo y pertenecer al mismo año lectivo.' })
+    if (destination.id === current.courseId) return json(response, 400, { error: 'Selecciona un curso distinto al actual.' })
+    const newEnrollmentId = randomUUID()
+    await db.transaction(async tx => {
+      await tx.run(`UPDATE student_enrollments SET status = 'Trasladada', end_date = ?, notes = ? WHERE id = ? AND school_id = ?`, effectiveDate, notes, current.id, user.school_id)
+      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, status, start_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, newEnrollmentId, user.school_id, current.studentId, destination.id, current.academicYear, effectiveDate, notes, user.id)
+      await tx.run('UPDATE students SET grade = ? WHERE id = ? AND school_id = ?', destination.grade, current.studentId, user.school_id)
+    })
+    await logAudit(user.school_id, user.id, 'student_transferred')
+    return json(response, 200, { enrollmentId: newEnrollmentId, transferred: true })
   }
 
   if (url.pathname === '/api/students' && method === 'GET') {

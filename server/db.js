@@ -130,6 +130,40 @@ export async function migrate() {
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, academic_year, grade)
     );
+    CREATE TABLE IF NOT EXISTS enrollment_requests (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      student_id TEXT REFERENCES students(id),
+      student_name TEXT NOT NULL,
+      document TEXT NOT NULL,
+      grade_requested TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      guardian_name TEXT NOT NULL,
+      guardian_phone TEXT NOT NULL DEFAULT '',
+      pending_documents TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK (status IN ('Solicitada','En revisión','Pendiente documentos','Aprobada','Rechazada')),
+      created_by TEXT NOT NULL REFERENCES users(id),
+      updated_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS enrollment_requests_school_status_idx ON enrollment_requests(school_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS enrollment_requests_document_idx ON enrollment_requests(school_id, document, academic_year);
+    CREATE TABLE IF NOT EXISTS student_enrollments (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      course_id TEXT REFERENCES courses(id),
+      academic_year TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('Activa','Trasladada','Retirada')),
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS student_enrollments_student_year_idx ON student_enrollments(school_id, student_id, academic_year, status);
     CREATE TABLE IF NOT EXISTS course_teachers (
       course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -189,6 +223,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 5)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 6)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 7)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 8)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
