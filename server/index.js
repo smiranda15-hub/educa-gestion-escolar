@@ -140,9 +140,45 @@ async function route(request, response) {
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
 
+  if (url.pathname === '/api/dashboard' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar este panel.' })
+    const date = String(url.searchParams.get('date') || '')
+    if (!validDate(date)) return json(response, 400, { error: 'La fecha del panel no es válida.' })
+    const activeStudents = Number((await db.get("SELECT COUNT(*) AS count FROM students WHERE school_id = ? AND status = 'Activo'", user.school_id)).count)
+    const courses = Number((await db.get('SELECT COUNT(*) AS count FROM courses WHERE school_id = ?', user.school_id)).count)
+    const rows = await db.all(`SELECT status, COUNT(*) AS count FROM attendance_records
+      WHERE school_id = ? AND attendance_date = ? GROUP BY status`, user.school_id, date)
+    const attendance = { total: 0, present: 0, absent: 0, late: 0, justified: 0, rate: null }
+    for (const row of rows) {
+      const count = Number(row.count)
+      attendance.total += count
+      if (row.status === 'Presente') attendance.present += count
+      if (row.status === 'Ausente') attendance.absent += count
+      if (row.status === 'Tarde') attendance.late += count
+      if (row.status === 'Justificado') attendance.justified += count
+    }
+    if (attendance.total) attendance.rate = Math.round(((attendance.present + attendance.late) / attendance.total) * 1000) / 10
+    const start = new Date(`${date}T00:00:00.000Z`)
+    start.setUTCDate(start.getUTCDate() - 6)
+    const startDate = start.toISOString().slice(0, 10)
+    const weeklyRows = await db.all(`SELECT attendance_date AS "date", COUNT(*) AS total,
+      SUM(CASE WHEN status IN ('Presente','Tarde') THEN 1 ELSE 0 END) AS attended
+      FROM attendance_records WHERE school_id = ? AND attendance_date >= ? AND attendance_date <= ?
+      GROUP BY attendance_date ORDER BY attendance_date`, user.school_id, startDate, date)
+    const byDate = new Map(weeklyRows.map(row => [row.date, { total: Number(row.total), attended: Number(row.attended) }]))
+    const weeklyAttendance = Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(`${startDate}T12:00:00.000Z`)
+      day.setUTCDate(day.getUTCDate() + index)
+      const dayKey = day.toISOString().slice(0, 10)
+      const values = byDate.get(dayKey) || { total: 0, attended: 0 }
+      return { date: dayKey, label: new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', timeZone: 'UTC' }).format(day), total: values.total, rate: values.total ? Math.round((values.attended / values.total) * 1000) / 10 : null }
+    })
+    return json(response, 200, { date, activeStudents, courses, attendance, weeklyAttendance })
+  }
+
   if (url.pathname === '/api/users' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede consultar las cuentas del colegio.' })
-    const users = await db.all(`SELECT id, email, full_name AS name, role, is_active AS active, created_at AS createdAt
+    const users = await db.all(`SELECT id, email, full_name AS name, role, is_active AS active, created_at AS "createdAt"
       FROM users WHERE school_id = ? ORDER BY full_name`, user.school_id)
     return json(response, 200, { users })
   }
@@ -207,8 +243,8 @@ async function route(request, response) {
 
   if (url.pathname === '/api/courses' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar los cursos.' })
-    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS academicYear,
-      COUNT(DISTINCT ct.user_id) AS teacherCount
+    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear",
+      COUNT(DISTINCT ct.user_id) AS "teacherCount"
       FROM courses c LEFT JOIN course_teachers ct ON ct.course_id = c.id
       WHERE c.school_id = ? GROUP BY c.id ORDER BY c.academic_year DESC, c.grade`, user.school_id)
     const mapped = await Promise.all(courses.map(async course => ({ ...course, teacherCount: Number(course.teacherCount), teachers: await db.all(`SELECT u.id, u.full_name AS name, ct.subject
@@ -245,8 +281,8 @@ async function route(request, response) {
   }
   if (url.pathname === '/api/teacher/courses' && method === 'GET') {
     if (user.role !== 'docente') return json(response, 403, { error: 'Este acceso es solo para docentes.' })
-    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS academicYear, ct.subject,
-      (SELECT COUNT(*) FROM students st WHERE st.school_id = c.school_id AND st.grade = c.grade AND st.status = 'Activo') AS studentCount
+    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear", ct.subject,
+      (SELECT COUNT(*) FROM students st WHERE st.school_id = c.school_id AND st.grade = c.grade AND st.status = 'Activo') AS "studentCount"
       FROM course_teachers ct JOIN courses c ON c.id = ct.course_id
       WHERE ct.user_id = ? AND c.school_id = ? ORDER BY c.academic_year DESC, c.grade, ct.subject`, user.id, user.school_id)
     return json(response, 200, { courses: courses.map(course => ({ ...course, studentCount: Number(course.studentCount) })) })
@@ -266,11 +302,11 @@ async function route(request, response) {
     const courseId = String(url.searchParams.get('courseId') || '')
     const attendanceDate = String(url.searchParams.get('date') || '')
     if (!validDate(attendanceDate)) return json(response, 400, { error: 'Selecciona una fecha válida.' })
-    const course = await db.get('SELECT id, grade, name, academic_year AS academicYear FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    const course = await db.get('SELECT id, grade, name, academic_year AS "academicYear" FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
     const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, st.status,
-      ar.status AS attendanceStatus, ar.marked_at AS markedAt
+      ar.status AS "attendanceStatus", ar.marked_at AS "markedAt"
       FROM students st LEFT JOIN attendance_records ar
       ON ar.student_id = st.id AND ar.course_id = ? AND ar.attendance_date = ?
       WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo'
@@ -304,11 +340,96 @@ async function route(request, response) {
     return json(response, 200, { saved: records.length })
   }
 
+  if (url.pathname === '/api/grades/courses' && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    const assignments = await db.all(`SELECT c.id AS "courseId", c.name AS "courseName", c.grade,
+      c.academic_year AS "academicYear", ct.subject, u.full_name AS "teacherName"
+      FROM course_teachers ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id
+      WHERE c.school_id = ? AND (? <> 'docente' OR ct.user_id = ?)
+      ORDER BY c.academic_year DESC, c.grade, ct.subject, u.full_name`, user.school_id, user.role, user.id)
+    return json(response, 200, { assignments })
+  }
+  if (url.pathname === '/api/grades/assessments' && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    const courseId = String(url.searchParams.get('courseId') || '')
+    const subject = String(url.searchParams.get('subject') || '')
+    const period = String(url.searchParams.get('period') || '')
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    if (!course || !subject || !period) return json(response, 400, { error: 'Selecciona curso, asignatura y periodo.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
+    const assessments = await db.all(`SELECT id, title, subject, period, max_score AS "maxScore", created_at AS "createdAt"
+      FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
+      ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
+    return json(response, 200, { assessments })
+  }
+  if (url.pathname === '/api/grades/assessments' && method === 'POST') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear evaluaciones.' })
+    const body = await readBody(request)
+    const courseId = String(body.courseId || '')
+    const subject = String(body.subject || '').trim()
+    const period = String(body.period || '').trim()
+    const title = String(body.title || '').trim()
+    const maxScore = Number(body.maxScore)
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
+    if (subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre de la evaluación y su puntaje máximo.' })
+    const id = randomUUID()
+    await db.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, maxScore, user.id)
+    await logAudit(user.school_id, user.id, 'grade_assessment_created')
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, maxScore } })
+  }
+  const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
+  if (gradeAssessmentMatch && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.max_score AS "maxScore"
+      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
+    const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, sg.score, sg.comment, sg.updated_at AS "updatedAt"
+      FROM students st LEFT JOIN student_grades sg ON sg.student_id = st.id AND sg.assessment_id = ?
+      WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo' ORDER BY st.full_name`, assessment.id, user.school_id, assessment.grade)
+    return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
+  }
+  const gradeScoresMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/scores$/i)
+  if (gradeScoresMatch && method === 'POST') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar calificaciones.' })
+    const body = await readBody(request)
+    if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos una calificación para guardar.' })
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.max_score AS "maxScore", c.grade
+      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeScoresMatch[1], user.school_id, user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
+    const maxScore = Number(assessment.maxScore)
+    const records = body.records.map(record => ({ studentId: String(record.studentId || ''), score: record.score, comment: String(record.comment || '').trim() }))
+    if (records.some(record => !/^[0-9a-f-]{36}$/i.test(record.studentId) || typeof record.score !== 'number' || !Number.isFinite(record.score) || record.score < 0 || record.score > maxScore || record.comment.length > 500) || new Set(records.map(record => record.studentId)).size !== records.length) return json(response, 400, { error: `Revisa las notas: deben estar entre 0 y ${maxScore}, sin estudiantes repetidos.` })
+    for (const record of records) if (!await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND grade = ? AND status = 'Activo'", record.studentId, user.school_id, assessment.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este grupo activo.' })
+    await db.transaction(async tx => {
+      for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+        assessment.id, record.studentId, record.score, record.comment, user.id, new Date().toISOString())
+    })
+    await logAudit(user.school_id, user.id, 'grade_records_saved')
+    return json(response, 200, { saved: records.length })
+  }
+
   if (url.pathname === '/api/students' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'El acceso a la lista completa de estudiantes está limitado a administración y secretaría.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
     const status = url.searchParams.get('status') || 'Todos'
-    const students = await db.all(`SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS createdAt
+    const students = await db.all(`SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt"
       FROM students WHERE school_id = ? AND (full_name LIKE ? OR document LIKE ? OR grade LIKE ? OR guardian_name LIKE ?)
       AND (? = 'Todos' OR status = ?) ORDER BY created_at DESC LIMIT 500`, user.school_id, search, search, search, search, status, status)
     return json(response, 200, { students })
@@ -331,7 +452,7 @@ async function route(request, response) {
       throw error
     }
     await logAudit(user.school_id, user.id, 'student_created')
-    return json(response, 201, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS createdAt FROM students WHERE id = ?', id) })
+    return json(response, 201, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt" FROM students WHERE id = ?', id) })
   }
   const studentMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})$/i)
   if (studentMatch && method === 'PATCH') {
@@ -350,7 +471,7 @@ async function route(request, response) {
     try { await db.run('UPDATE students SET full_name = ?, document = ?, grade = ?, guardian_name = ?, guardian_phone = ?, status = ? WHERE id = ? AND school_id = ?', name, documentNumber, grade, guardian, phone, status, id, user.school_id) }
     catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ese documento ya está registrado en este colegio.' }); throw error }
     await logAudit(user.school_id, user.id, 'student_updated')
-    return json(response, 200, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS createdAt FROM students WHERE id = ? AND school_id = ?', id, user.school_id) })
+    return json(response, 200, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt" FROM students WHERE id = ? AND school_id = ?', id, user.school_id) })
   }
   if (studentMatch && method === 'DELETE') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede eliminar estudiantes.' })

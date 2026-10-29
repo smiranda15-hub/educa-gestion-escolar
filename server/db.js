@@ -149,11 +149,34 @@ export async function migrate() {
       UNIQUE (course_id, student_id, attendance_date)
     );
     CREATE INDEX IF NOT EXISTS attendance_school_date_idx ON attendance_records(school_id, attendance_date);
+    CREATE TABLE IF NOT EXISTS grade_assessments (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      course_id TEXT NOT NULL REFERENCES courses(id),
+      subject TEXT NOT NULL,
+      period TEXT NOT NULL,
+      title TEXT NOT NULL,
+      max_score REAL NOT NULL CHECK (max_score > 0),
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS grade_assessments_scope_idx ON grade_assessments(school_id, course_id, period);
+    CREATE TABLE IF NOT EXISTS student_grades (
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      score REAL NOT NULL CHECK (score >= 0),
+      comment TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      PRIMARY KEY (assessment_id, student_id)
+    );
+    CREATE INDEX IF NOT EXISTS student_grades_student_idx ON student_grades(student_id);
   `)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 4)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 5)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
