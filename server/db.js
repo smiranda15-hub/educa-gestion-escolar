@@ -193,6 +193,7 @@ export async function migrate() {
       title TEXT NOT NULL,
       instructions TEXT NOT NULL DEFAULT '',
       due_at TEXT,
+      weight_percent REAL NOT NULL DEFAULT 100 CHECK (weight_percent > 0 AND weight_percent <= 100),
       max_score REAL NOT NULL CHECK (max_score > 0),
       created_by TEXT NOT NULL REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
@@ -208,6 +209,22 @@ export async function migrate() {
       PRIMARY KEY (assessment_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS student_grades_student_idx ON student_grades(student_id);
+    CREATE TABLE IF NOT EXISTS academic_grade_rules (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      course_id TEXT NOT NULL REFERENCES courses(id),
+      subject TEXT NOT NULL,
+      period TEXT NOT NULL,
+      scale_min REAL NOT NULL,
+      scale_max REAL NOT NULL,
+      passing_score REAL NOT NULL,
+      updated_by TEXT NOT NULL REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      CHECK (scale_max > scale_min),
+      CHECK (passing_score >= scale_min AND passing_score <= scale_max),
+      UNIQUE (course_id, subject, period)
+    );
+    CREATE INDEX IF NOT EXISTS academic_grade_rules_school_idx ON academic_grade_rules(school_id, course_id, period);
     CREATE TABLE IF NOT EXISTS work_submissions (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -247,6 +264,7 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'courses' AND column_name = 'is_active'")) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'instructions'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'due_at'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'weight_percent'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
   } else {
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
@@ -255,6 +273,7 @@ export async function migrate() {
     const assessmentColumns = await db.all('PRAGMA table_info(grade_assessments)')
     if (!assessmentColumns.some(column => column.name === 'instructions')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
     if (!assessmentColumns.some(column => column.name === 'due_at')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
+    if (!assessmentColumns.some(column => column.name === 'weight_percent')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
@@ -266,6 +285,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 8)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 9)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 10)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 11)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

@@ -692,7 +692,7 @@ async function route(request, response) {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", subject, period, max_score AS "maxScore", created_at AS "createdAt"
+    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
       FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
       ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
     return json(response, 200, { assessments })
@@ -706,23 +706,24 @@ async function route(request, response) {
     const title = String(body.title || '').trim()
     const instructions = String(body.instructions || '').trim()
     const dueAt = String(body.dueAt || '').trim()
+    const weightPercent = Number(body.weightPercent ?? 100)
     const maxScore = Number(body.maxScore)
     const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    if (subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || (dueAt && !validDate(dueAt)) || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, la fecha límite y el puntaje máximo.' })
+    if (subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || (dueAt && !validDate(dueAt)) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, la fecha límite, la ponderación y el puntaje máximo.' })
     const id = randomUUID()
-    await db.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, maxScore, user.id)
+    await db.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, weightPercent, maxScore, user.id)
     await logAudit(user.school_id, user.id, 'grade_assessment_created')
-    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, maxScore } })
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, weightPercent, maxScore } })
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
     if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
-      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.max_score AS "maxScore"
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
@@ -732,7 +733,60 @@ async function route(request, response) {
     const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, sg.score, sg.comment, sg.updated_at AS "updatedAt"
       FROM students st LEFT JOIN student_grades sg ON sg.student_id = st.id AND sg.assessment_id = ?
       WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo' ORDER BY st.full_name`, assessment.id, user.school_id, assessment.grade)
-    return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
+    return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore), weightPercent: Number(assessment.weightPercent) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
+  }
+  const gradeAssessmentWeightMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/weight$/i)
+  if (gradeAssessmentWeightMatch && method === 'PATCH') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar ponderaciones.' })
+    const body = await readBody(request)
+    const weightPercent = Number(body.weightPercent)
+    if (!Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100) return json(response, 400, { error: 'La ponderación debe estar entre 0,01 y 100 %.' })
+    const assessment = await db.get('SELECT course_id AS "courseId", subject FROM grade_assessments WHERE id = ? AND school_id = ?', gradeAssessmentWeightMatch[1], user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
+    await db.run('UPDATE grade_assessments SET weight_percent = ? WHERE id = ? AND school_id = ?', weightPercent, gradeAssessmentWeightMatch[1], user.school_id)
+    await logAudit(user.school_id, user.id, 'grade_assessment_weight_updated')
+    return json(response, 200, { weightPercent })
+  }
+  if (url.pathname === '/api/grades/rule' && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar reglas académicas.' })
+    const courseId = String(url.searchParams.get('courseId') || '')
+    const subject = String(url.searchParams.get('subject') || '').trim()
+    const period = String(url.searchParams.get('period') || '').trim()
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    if (!course || !subject || !period) return json(response, 400, { error: 'Selecciona curso, asignatura y periodo.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
+    const rule = await db.get(`SELECT scale_min AS "scaleMin", scale_max AS "scaleMax", passing_score AS "passingScore",
+      updated_at AS "updatedAt" FROM academic_grade_rules WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?`, user.school_id, course.id, subject, period)
+    return json(response, 200, { rule: rule ? { ...rule, scaleMin: Number(rule.scaleMin), scaleMax: Number(rule.scaleMax), passingScore: Number(rule.passingScore) } : null })
+  }
+  if (url.pathname === '/api/grades/rule' && method === 'PUT') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para configurar reglas académicas.' })
+    const body = await readBody(request)
+    const courseId = String(body.courseId || '')
+    const subject = String(body.subject || '').trim()
+    const period = String(body.period || '').trim()
+    const scaleMin = Number(body.scaleMin)
+    const scaleMax = Number(body.scaleMax)
+    const passingScore = Number(body.passingScore)
+    if (!courseId || subject.length < 2 || subject.length > 80 || period.length < 2 || period.length > 40 || !Number.isFinite(scaleMin) || !Number.isFinite(scaleMax) || !Number.isFinite(passingScore) || scaleMin < 0 || scaleMax > 100 || scaleMax <= scaleMin || passingScore < scaleMin || passingScore > scaleMax) return json(response, 400, { error: 'Revisa la escala. La nota aprobatoria debe quedar dentro del rango mínimo y máximo.' })
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
+      AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
+    const id = randomUUID()
+    await db.run(`INSERT INTO academic_grade_rules (id, school_id, course_id, subject, period, scale_min, scale_max, passing_score, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(course_id, subject, period) DO UPDATE SET scale_min = excluded.scale_min, scale_max = excluded.scale_max,
+        passing_score = excluded.passing_score, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      id, user.school_id, course.id, subject, period, scaleMin, scaleMax, passingScore, user.id, new Date().toISOString())
+    await logAudit(user.school_id, user.id, 'academic_grade_rule_saved')
+    return json(response, 200, { rule: { scaleMin, scaleMax, passingScore } })
   }
   const gradeScoresMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/scores$/i)
   if (gradeScoresMatch && method === 'POST') {
@@ -791,10 +845,12 @@ async function route(request, response) {
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, student.id)) return json(response, 403, { error: 'Solo puedes consultar los boletines de estudiantes vinculados a tu cuenta.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ?', user.id, user.school_id, student.grade, academicYear)) return json(response, 403, { error: 'No tienes una asignatura asignada a ese estudiante para el año lectivo seleccionado.' })
     const marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
-        a.due_at AS "dueAt", sg.score, sg.comment, sg.updated_at AS "updatedAt",
+        a.due_at AS "dueAt", a.weight_percent AS "weightPercent", rule.scale_min AS "scaleMin",
+        rule.scale_max AS "scaleMax", rule.passing_score AS "passingScore", sg.score, sg.comment, sg.updated_at AS "updatedAt",
         (SELECT u.full_name FROM course_teachers ct JOIN users u ON u.id = ct.user_id
           WHERE ct.course_id = c.id AND ct.subject = a.subject ORDER BY u.full_name LIMIT 1) AS "teacherName"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      LEFT JOIN academic_grade_rules rule ON rule.school_id = a.school_id AND rule.course_id = c.id AND rule.subject = a.subject AND rule.period = a.period
       LEFT JOIN student_grades sg ON sg.assessment_id = a.id AND sg.student_id = ?
       WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ? AND a.period = ?
         AND (? <> 'docente' OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?))
@@ -803,19 +859,31 @@ async function route(request, response) {
     for (const mark of marks) {
       const score = mark.score === null ? null : Number(mark.score)
       const maxScore = Number(mark.maxScore)
-      if (!bySubject.has(mark.subject)) bySubject.set(mark.subject, { subject: mark.subject, teacherName: mark.teacherName || '', assessments: [], scorePercentages: [] })
+      if (!bySubject.has(mark.subject)) bySubject.set(mark.subject, { subject: mark.subject, teacherName: mark.teacherName || '', assessments: [], scoreWeights: [], scaleMin: mark.scaleMin === null ? null : Number(mark.scaleMin), scaleMax: mark.scaleMax === null ? null : Number(mark.scaleMax), passingScore: mark.passingScore === null ? null : Number(mark.passingScore) })
       const summary = bySubject.get(mark.subject)
-      summary.assessments.push({ title: mark.title, score, maxScore, comment: mark.comment || '', updatedAt: mark.updatedAt, instructions: mark.instructions || '', dueAt: mark.dueAt })
-      if (score !== null && maxScore > 0) summary.scorePercentages.push(score / maxScore * 100)
+      const weightPercent = Number(mark.weightPercent) || 100
+      summary.assessments.push({ title: mark.title, score, maxScore, weightPercent, comment: mark.comment || '', updatedAt: mark.updatedAt, instructions: mark.instructions || '', dueAt: mark.dueAt })
+      if (score !== null && maxScore > 0) summary.scoreWeights.push({ percent: score / maxScore * 100, weight: weightPercent })
     }
-    const subjects = [...bySubject.values()].map(summary => ({
-      subject: summary.subject,
-      teacherName: summary.teacherName,
-      averagePercent: summary.scorePercentages.length ? Math.round(summary.scorePercentages.reduce((sum, value) => sum + value, 0) / summary.scorePercentages.length * 100) / 100 : null,
-      gradedCount: summary.scorePercentages.length,
-      assessmentCount: summary.assessments.length,
-      assessments: summary.assessments,
-    }))
+    const subjects = [...bySubject.values()].map(summary => {
+      const totalWeight = summary.scoreWeights.reduce((sum, item) => sum + item.weight, 0)
+      const averagePercent = totalWeight ? Math.round(summary.scoreWeights.reduce((sum, item) => sum + item.percent * item.weight, 0) / totalWeight * 100) / 100 : null
+      const institutionalScore = averagePercent === null || summary.scaleMin === null || summary.scaleMax === null ? null
+        : Math.round((summary.scaleMin + averagePercent / 100 * (summary.scaleMax - summary.scaleMin)) * 100) / 100
+      return {
+        subject: summary.subject,
+        teacherName: summary.teacherName,
+        averagePercent,
+        scaleMin: summary.scaleMin,
+        scaleMax: summary.scaleMax,
+        passingScore: summary.passingScore,
+        institutionalScore,
+        result: institutionalScore === null || summary.passingScore === null ? null : institutionalScore >= summary.passingScore ? 'Aprobado' : 'En seguimiento',
+        gradedCount: summary.scoreWeights.length,
+        assessmentCount: summary.assessments.length,
+        assessments: summary.assessments,
+      }
+    })
     await logAudit(user.school_id, user.id, 'report_card_viewed')
     return json(response, 200, { student, academicYear, period, subjects, generatedAt: new Date().toISOString() })
   }
