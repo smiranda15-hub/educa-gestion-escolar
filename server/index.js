@@ -48,6 +48,20 @@ const workFileTypes = new Map([
   ['.docx', { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', magic: bytes => bytes.subarray(0, 4).toString('hex') === '504b0304' }],
   ['.xlsx', { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', magic: bytes => bytes.subarray(0, 4).toString('hex') === '504b0304' }],
 ])
+const assessmentImageTypes = new Map([
+  ['.jpg', { mime: 'image/jpeg', magic: bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff' }],
+  ['.jpeg', { mime: 'image/jpeg', magic: bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff' }],
+  ['.png', { mime: 'image/png', magic: bytes => bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' }],
+  ['.webp', { mime: 'image/webp', magic: bytes => bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP' }],
+])
+const validGoogleFormsUrl = value => {
+  if (!value) return true
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port &&
+      (url.hostname === 'forms.gle' || url.hostname === 'forms.google.com' || (url.hostname === 'docs.google.com' && url.pathname.startsWith('/forms/')))
+  } catch { return false }
+}
 const hashPassword = async password => {
   const salt = randomBytes(16)
   const derived = await scrypt(password, salt, 64)
@@ -264,6 +278,15 @@ async function route(request, response) {
     const result = await db.run('UPDATE communication_recipients SET read_at = CURRENT_TIMESTAMP WHERE communication_id = ? AND user_id = ? AND communication_id IN (SELECT id FROM communications WHERE school_id = ?)', communicationReadMatch[1], user.id, user.school_id)
     if (!result.rowCount && !result.changes) return json(response, 404, { error: 'No encontramos esta comunicación en tu bandeja.' })
     return json(response, 200, { read: true })
+  }
+  const communicationDeleteMatch = url.pathname.match(/^\/api\/communications\/([0-9a-f-]{36})$/i)
+  if (communicationDeleteMatch && method === 'DELETE') {
+    const communication = await db.get('SELECT id, created_by AS "createdBy" FROM communications WHERE id = ? AND school_id = ?', communicationDeleteMatch[1], user.school_id)
+    if (!communication) return json(response, 404, { error: 'No encontramos esta comunicación en el colegio.' })
+    if (user.role !== 'admin' && communication.createdBy !== user.id) return json(response, 403, { error: 'Solo el autor o un administrador pueden eliminar esta comunicación.' })
+    await db.transaction(async tx => { await tx.run('DELETE FROM communications WHERE id = ? AND school_id = ?', communication.id, user.school_id) })
+    await logAudit(user.school_id, user.id, `communication_deleted:${communication.id}`)
+    return json(response, 200, { deleted: true })
   }
 
   if (url.pathname === '/api/reports/options' && method === 'GET') {
@@ -692,14 +715,14 @@ async function route(request, response) {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", is_published AS "isPublished", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
+    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", is_published AS "isPublished", external_form_url AS "externalFormUrl", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
       FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
       ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
     return json(response, 200, { assessments })
   }
   if (url.pathname === '/api/grades/assessments' && method === 'POST') {
     if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear evaluaciones.' })
-    const body = await readBody(request)
+    const body = await readLargeJsonBody(request, 30 * 1024 * 1024)
     const courseId = String(body.courseId || '')
     const subject = String(body.subject || '').trim()
     const period = String(body.period || '').trim()
@@ -708,7 +731,9 @@ async function route(request, response) {
     const dueAt = String(body.dueAt || '').trim()
     const deliveryMode = String(body.deliveryMode || 'file')
     const isPublished = body.isPublished === true ? 1 : 0
+    const externalFormUrl = String(body.externalFormUrl || '').trim()
     const questions = Array.isArray(body.questions) ? body.questions : []
+    const images = Array.isArray(body.images) ? body.images : []
     const weightPercent = Number(body.weightPercent ?? 100)
     const maxScore = Number(body.maxScore)
     const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
@@ -716,7 +741,22 @@ async function route(request, response) {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    if (!['file', 'online'].includes(deliveryMode) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || (dueAt && !validDate(dueAt)) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, la fecha límite, la ponderación y el puntaje máximo.' })
+    if (!['file', 'online'].includes(deliveryMode) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, el enlace de Google Forms, la fecha límite, la ponderación y el puntaje máximo.' })
+    if (images.length > 5) return json(response, 400, { error: 'Puedes adjuntar hasta 5 imágenes por actividad.' })
+    const imageRecords = []
+    let imageTotalBytes = 0
+    for (const image of images) {
+      if (!image || typeof image !== 'object') return json(response, 400, { error: 'Una imagen adjunta no es válida.' })
+      const base64 = String(image.fileBase64 || '')
+      if (!base64 || base64.length > 5_592_408 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) return json(response, 400, { error: 'Una imagen está vacía o no tiene un formato válido.' })
+      const fileData = Buffer.from(base64, 'base64')
+      const fileName = basename(String(image.fileName || '').replaceAll('\\', '/')).replace(/[\u0000-\u001f\u007f]/g, '').replace(/[^\p{L}\p{N}._ ()-]/gu, '').slice(0, 140)
+      const imageType = assessmentImageTypes.get(extname(fileName).toLowerCase())
+      if (!fileData.length || fileData.length > 4 * 1024 * 1024 || fileData.toString('base64') !== base64 || !imageType || image.contentType !== imageType.mime || !imageType.magic(fileData)) return json(response, 415, { error: 'Usa imágenes JPG, PNG o WEBP de máximo 4 MB cada una.' })
+      imageTotalBytes += fileData.length
+      if (imageTotalBytes > 20 * 1024 * 1024) return json(response, 413, { error: 'Las imágenes adjuntas no pueden superar 20 MB en total.' })
+      imageRecords.push({ id: randomUUID(), fileName, contentType: imageType.mime, fileSize: fileData.length, fileData })
+    }
     if (deliveryMode === 'online' && (!questions.length || questions.length > 50 || questions.some(question => {
       if (!question || typeof question !== 'object') return true
       const prompt = String(question.prompt || '').trim()
@@ -727,26 +767,28 @@ async function route(request, response) {
     if (deliveryMode === 'file' && questions.length) return json(response, 400, { error: 'Los trabajos con archivo no deben incluir preguntas en línea.' })
     const id = randomUUID()
     await db.transaction(async tx => {
-      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, is_published, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, isPublished, weightPercent, maxScore, user.id)
+      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, is_published, external_form_url, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, isPublished, externalFormUrl || null, weightPercent, maxScore, user.id)
       for (let index = 0; index < questions.length; index++) {
         const question = questions[index]
         await tx.run('INSERT INTO online_assessment_questions (id, assessment_id, question_no, prompt, options_json, correct_option, points) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), id, index + 1, String(question.prompt).trim(), JSON.stringify(question.options.map(option => String(option).trim())), Number(question.correctOption), Number(question.points))
       }
+      for (const image of imageRecords) await tx.run('INSERT INTO assessment_images (id, school_id, assessment_id, file_name, content_type, file_size, file_data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', image.id, user.school_id, id, image.fileName, image.contentType, image.fileSize, image.fileData, user.id)
     })
     await logAudit(user.school_id, user.id, 'grade_assessment_created')
-    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, isPublished: Boolean(isPublished), weightPercent, maxScore } })
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, isPublished: Boolean(isPublished), externalFormUrl: externalFormUrl || null, images: imageRecords.map(({ id, fileName, contentType }) => ({ id, fileName, contentType })), weightPercent, maxScore } })
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
     if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
-      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
+    assessment.images = await db.all('SELECT id, file_name AS "fileName", content_type AS "contentType", file_size AS "fileSize" FROM assessment_images WHERE assessment_id = ? ORDER BY created_at, id', assessment.id)
     const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, sg.score, sg.comment, sg.updated_at AS "updatedAt"
       FROM students st JOIN courses assessment_course ON assessment_course.id = ? AND assessment_course.school_id = st.school_id
       LEFT JOIN student_grades sg ON sg.student_id = st.id AND sg.assessment_id = ?
@@ -757,6 +799,17 @@ async function route(request, response) {
           WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))
       ) ORDER BY st.full_name`, assessment.courseId, assessment.id, user.school_id)
     return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore), weightPercent: Number(assessment.weightPercent) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
+  }
+  const gradeAssessmentDeleteMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
+  if (gradeAssessmentDeleteMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar evaluaciones.' })
+    const assessment = await db.get('SELECT id, course_id AS "courseId", subject, title FROM grade_assessments WHERE id = ? AND school_id = ?', gradeAssessmentDeleteMatch[1], user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esta evaluación.' })
+    await db.transaction(async tx => { await tx.run('DELETE FROM grade_assessments WHERE id = ? AND school_id = ?', assessment.id, user.school_id) })
+    await logAudit(user.school_id, user.id, `grade_assessment_deleted:${assessment.id}`)
+    return json(response, 200, { deleted: true })
   }
   const assessmentPublicationMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/publication$/i)
   if (assessmentPublicationMatch && method === 'PATCH') {
@@ -964,7 +1017,7 @@ async function route(request, response) {
     const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
     if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const assignments = await db.all(`SELECT a.id, a.title, a.instructions, a.due_at AS "dueAt", a.subject, a.period,
-        a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished",
+        a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl",
         a.max_score AS "maxScore", c.name AS "courseName", c.academic_year AS "academicYear",
         sg.score, sg.comment, latest.id AS "submissionId", latest.original_file_name AS "fileName",
         latest.uploaded_at AS "uploadedAt", latest.submission_no AS "submissionNo",
@@ -982,7 +1035,34 @@ async function route(request, response) {
             AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
               WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)))
       ORDER BY a.due_at, a.subject, a.title`, student.id, student.id, student.id, user.school_id, user.school_id, student.grade, student.id, student.id)
-    return json(response, 200, { assignments: assignments.map(item => ({ ...item, isPublished: Boolean(item.isPublished), onlineStatus: item.onlineSubmittedAt ? 'submitted' : item.onlineAttemptId ? 'started' : null, score: item.score === null ? null : Number(item.score), maxScore: Number(item.maxScore) })) })
+    const imageGroups = new Map()
+    if (assignments.length) {
+      const placeholders = assignments.map(() => '?').join(', ')
+      const images = await db.all(`SELECT id, assessment_id AS "assessmentId", file_name AS "fileName", content_type AS "contentType" FROM assessment_images WHERE school_id = ? AND assessment_id IN (${placeholders}) ORDER BY created_at, id`, user.school_id, ...assignments.map(item => item.id))
+      for (const image of images) imageGroups.set(image.assessmentId, [...(imageGroups.get(image.assessmentId) || []), { id: image.id, fileName: image.fileName, contentType: image.contentType }])
+    }
+    return json(response, 200, { assignments: assignments.map(item => ({ ...item, images: imageGroups.get(item.id) || [], isPublished: Boolean(item.isPublished), onlineStatus: item.onlineSubmittedAt ? 'submitted' : item.onlineAttemptId ? 'started' : null, score: item.score === null ? null : Number(item.score), maxScore: Number(item.maxScore) })) })
+  }
+  const assessmentImageMatch = url.pathname.match(/^\/api\/assessment-images\/([0-9a-f-]{36})$/i)
+  if (assessmentImageMatch && method === 'GET') {
+    const image = await db.get(`SELECT image.id, image.file_name AS "fileName", image.content_type AS "contentType", image.file_size AS "fileSize", image.file_data AS "fileData",
+        a.id AS "assessmentId", a.course_id AS "courseId", a.subject, a.is_published AS "isPublished", c.grade, c.academic_year AS "academicYear", c.is_active AS "courseActive"
+      FROM assessment_images image JOIN grade_assessments a ON a.id = image.assessment_id JOIN courses c ON c.id = a.course_id
+      WHERE image.id = ? AND image.school_id = ? AND a.school_id = ? AND c.school_id = ?`, assessmentImageMatch[1], user.school_id, user.school_id, user.school_id)
+    if (!image) return json(response, 404, { error: 'No encontramos esta imagen.' })
+    const staff = ['admin', 'secretaria'].includes(user.role)
+    const teacher = user.role === 'docente' && await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND user_id = ?', image.courseId, image.subject, user.id)
+    const linked = ['acudiente', 'estudiante'].includes(user.role) && await db.get(`SELECT 1 FROM students st WHERE st.school_id = ? AND st.status = 'Activo'
+      AND st.id IN (SELECT student_id FROM user_students WHERE user_id = ?)
+      AND ((EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
+        AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa'))
+        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')
+          AND ? = (SELECT MAX(current_course.academic_year) FROM courses current_course WHERE current_course.school_id = st.school_id AND current_course.grade = st.grade AND current_course.is_active = 1)))`, user.school_id, user.id, image.courseId, image.academicYear, image.grade, image.academicYear)
+    if (!staff && !teacher && !(linked && image.isPublished && image.courseActive)) return json(response, 403, { error: 'No tienes permiso para ver esta imagen.' })
+    const safeName = encodeURIComponent(image.fileName).replaceAll("'", '%27')
+    response.writeHead(200, { 'Content-Type': image.contentType, 'Content-Length': String(image.fileSize), 'Content-Disposition': `inline; filename*=UTF-8''${safeName}`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; sandbox" })
+    response.end(image.fileData)
+    return
   }
   const onlineAssessmentAction = url.pathname.match(/^\/api\/portal\/online-assessments\/([0-9a-f-]{36})\/(start|draft|submit)$/i)
   if (onlineAssessmentAction && ((onlineAssessmentAction[2] === 'draft' && method === 'PATCH') || (onlineAssessmentAction[2] !== 'draft' && method === 'POST'))) {
@@ -1132,6 +1212,19 @@ async function route(request, response) {
     response.writeHead(200, { 'Content-Type': submission.contentType, 'Content-Length': String(submission.fileSize), 'Content-Disposition': `attachment; filename*=UTF-8''${safeName}`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
     response.end(submission.fileData)
     return
+  }
+  const submissionDeleteMatch = url.pathname.match(/^\/api\/grades\/submissions\/([0-9a-f-]{36})$/i)
+  if (submissionDeleteMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar entregas.' })
+    const submission = await db.get(`SELECT ws.id, ws.student_id AS "studentId", ws.assessment_id AS "assessmentId", a.course_id AS "courseId", a.subject, ws.original_file_name AS "fileName"
+      FROM work_submissions ws JOIN grade_assessments a ON a.id = ws.assessment_id
+      WHERE ws.id = ? AND ws.school_id = ? AND a.school_id = ?`, submissionDeleteMatch[1], user.school_id, user.school_id)
+    if (!submission) return json(response, 404, { error: 'No encontramos esta entrega en el colegio.' })
+    const teacher = user.role === 'docente' && await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND user_id = ?', submission.courseId, submission.subject, user.id)
+    if (!['admin', 'secretaria'].includes(user.role) && !teacher) return json(response, 403, { error: 'No tienes asignada la evaluación de esta entrega.' })
+    await db.run('DELETE FROM work_submissions WHERE assessment_id = ? AND student_id = ? AND school_id = ?', submission.assessmentId, submission.studentId, user.school_id)
+    await logAudit(user.school_id, user.id, 'work_submission_deleted')
+    return json(response, 200, { deleted: true })
   }
 
   if (url.pathname === '/api/enrollments' && method === 'GET') {

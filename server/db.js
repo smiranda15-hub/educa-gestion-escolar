@@ -195,6 +195,7 @@ export async function migrate() {
       due_at TEXT,
       delivery_mode TEXT NOT NULL DEFAULT 'file' CHECK (delivery_mode IN ('file','online')),
       is_published INTEGER NOT NULL DEFAULT 1,
+      external_form_url TEXT,
       weight_percent REAL NOT NULL DEFAULT 100 CHECK (weight_percent > 0 AND weight_percent <= 100),
       max_score REAL NOT NULL CHECK (max_score > 0),
       created_by TEXT NOT NULL REFERENCES users(id),
@@ -253,6 +254,18 @@ export async function migrate() {
       UNIQUE (assessment_id, student_id, submission_no)
     );
     CREATE INDEX IF NOT EXISTS work_submissions_assessment_student_idx ON work_submissions(assessment_id, student_id, submission_no);
+    CREATE TABLE IF NOT EXISTS assessment_images (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      file_name TEXT NOT NULL,
+      content_type TEXT NOT NULL CHECK (content_type IN ('image/jpeg','image/png','image/webp')),
+      file_size INTEGER NOT NULL CHECK (file_size > 0 AND file_size <= 4194304),
+      file_data ${usePostgres ? 'BYTEA' : 'BLOB'} NOT NULL,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS assessment_images_assessment_idx ON assessment_images(school_id, assessment_id);
     CREATE TABLE IF NOT EXISTS online_assessment_questions (
       id TEXT PRIMARY KEY,
       assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
@@ -303,6 +316,7 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'weight_percent'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'delivery_mode'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   } else {
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
@@ -314,6 +328,7 @@ export async function migrate() {
     if (!assessmentColumns.some(column => column.name === 'weight_percent')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
     if (!assessmentColumns.some(column => column.name === 'delivery_mode')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!assessmentColumns.some(column => column.name === 'is_published')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
+    if (!assessmentColumns.some(column => column.name === 'external_form_url')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
@@ -328,6 +343,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 11)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 12)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 13)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 14)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

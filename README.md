@@ -53,6 +53,8 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - Boletines por estudiante, curso, asignatura y periodo muestran evaluaciones, notas, observaciones y promedio ponderado. Administración, secretaría o el docente asignado pueden definir ponderación por evaluación, escala mínima/máxima y nota aprobatoria; el boletín conserva el porcentaje normalizado y muestra el equivalente institucional cuando la regla está configurada. El PDF se genera desde Imprimir en el navegador.
 - Administración y secretaría pueden publicar o retirar boletines por año lectivo y periodo; acudientes y estudiantes solo consultan los periodos publicados.
 - Las entregas y los boletines se limitan en el backend al colegio, al estudiante vinculado y a las asignaturas de cada docente.
+- En **Calificaciones**, docentes asignados pueden adjuntar hasta 5 imágenes JPG, PNG o WEBP (4 MB cada una; 20 MB en total) y un enlace HTTPS de Google Forms (`forms.gle`, `forms.google.com` o `docs.google.com/forms`). Los archivos se guardan en la base de datos y solo se sirven mediante una ruta autenticada, dentro del colegio y curso correspondientes.
+- El autor o un administrador puede eliminar comunicaciones; la eliminación también las quita de las bandejas de destinatarios. En **Ver entregas**, el docente asignado puede borrar una entrega individual; su nota se conserva. Al eliminar una evaluación se borran de forma permanente sus notas, preguntas, intentos, imágenes y entregas vinculadas; la aplicación pide confirmación antes de hacerlo.
 - La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña no está disponible todavía.
 
 ## Construcción
