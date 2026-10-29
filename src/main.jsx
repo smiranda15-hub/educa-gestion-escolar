@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BookOpen,
   CalendarDays, Check, ChevronDown, ChevronRight, ClipboardCheck,
-  Clock3, Download, Eye, EyeOff, FileText, GraduationCap, History, LayoutDashboard, LockKeyhole, Menu, MoreHorizontal,
+  Clock3, Download, Eye, EyeOff, FileText, GraduationCap, History, LayoutDashboard, LockKeyhole, LogOut, Menu,
   Plus, Pencil, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, Users, X,
 } from 'lucide-react'
 import './style.css'
@@ -286,6 +286,17 @@ function App() {
 
   const selectedSchool = schools.find(school => school.slug === loginSchool)
   const matchingSchools = schools.filter(school => `${school.name} ${school.slug}`.toLocaleLowerCase('es').includes(schoolSearch.trim().toLocaleLowerCase('es')))
+  const logout = async () => {
+    let confirmed = false
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+      confirmed = response.ok
+    } catch { /* Se cierra la vista local aunque el servidor no responda. */ }
+    setAuthenticated(false); setUser(null); setStudents([]); setDashboardData(null)
+    setSchoolUsers([]); setPortalStudents([]); setPortalAssignments([]); setReportCardData(null)
+    setAttendanceRows([]); setGradeRows([]); setAssessmentSubmissions([]); setQuery(''); setMenuOpen(false); setActive('Resumen')
+    setLoginNotice(confirmed ? '' : 'No se pudo confirmar el cierre en el servidor. Comprueba tu conexión.')
+  }
   const login = async (event) => {
     event.preventDefault()
     setLoginError('')
@@ -1137,7 +1148,7 @@ function App() {
         {navGroups.map(group => <section className="nav-section" key={group.title}><div className="nav-heading">{group.title}</div>{group.items.filter(item => (item.label !== 'Matrículas' || ['admin', 'secretaria'].includes(user?.role)) && (item.label !== 'Usuarios y accesos' || user?.role === 'admin') && (item.label !== 'Cursos y docentes' || ['admin', 'secretaria'].includes(user?.role)) && (item.label !== 'Mis cursos' || user?.role === 'docente') && (item.label !== 'Estudiantes' || ['admin', 'secretaria'].includes(user?.role)) && (item.label !== 'Asistencia' || ['admin', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Calificaciones' || ['admin', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Reportes' || ['admin', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Bitácora' || user?.role === 'admin') && (item.label !== 'Boletines' || ['admin', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user?.role)) && (item.label !== 'Mi aula' || ['acudiente', 'estudiante'].includes(user?.role))).map(item => <button key={item.label} className={`nav-item ${active === item.label ? 'selected' : ''}`} aria-current={active === item.label ? 'page' : undefined} onClick={() => { setActive(item.label); setMenuOpen(false) }}><item.icon size={18} strokeWidth={1.9} /><span>{item.label}</span>{item.badge && <span className="nav-badge">{item.badge}</span>}</button>)}</section>)}
         <div className="sidebar-note"><span className="note-icon"><Sparkles size={16} /></span><div><strong>Todo en orden</strong><p>Tu institución está al día.</p></div><ArrowRight size={15} className="note-arrow" /></div>
       </div>
-      <div className="sidebar-bottom">{user?.role === 'admin' && <button className="nav-item" onClick={() => { setActive('Configuración'); setSchoolSettingsError('') }}><Settings2 size={18} /><span>Configuración</span></button>}<div className="user-card"><div className="user-avatar">{user?.name?.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toLocaleUpperCase('es') || 'U'}</div><div className="user-copy"><strong>{user?.name || 'Usuario'}</strong><span>{user?.role === 'admin' ? 'Administrador' : user?.role || 'Personal'}</span></div><button className="icon-btn" title="Cambiar contraseña" aria-label="Cambiar contraseña" onClick={() => { setPasswordError(''); setPasswordDialog(true) }}><LockKeyhole size={16}/></button><button className="logout-button" title="Cerrar sesión" onClick={async () => { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); setUser(null); setStudents([]); setDashboardData(null) }}><MoreHorizontal size={19} className="muted-icon" /></button></div></div>
+      <div className="sidebar-bottom">{user?.role === 'admin' && <button className="nav-item" onClick={() => { setActive('Configuración'); setSchoolSettingsError('') }}><Settings2 size={18} /><span>Configuración</span></button>}<div className="user-card"><div className="user-avatar">{user?.name?.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toLocaleUpperCase('es') || 'U'}</div><div className="user-copy"><strong>{user?.name || 'Usuario'}</strong><span>{user?.role === 'admin' ? 'Administrador' : user?.role || 'Personal'}</span></div><button className="icon-btn" title="Cambiar contraseña" aria-label="Cambiar contraseña" onClick={() => { setPasswordError(''); setPasswordDialog(true) }}><LockKeyhole size={16}/></button></div><button type="button" className="logout-button" title="Cerrar sesión" aria-label="Cerrar sesión" onClick={logout}><LogOut size={17}/><span>Cerrar sesión</span></button></div>
     </aside>
     {menuOpen && <button className="scrim" aria-label="Cerrar menú" onClick={() => setMenuOpen(false)} />}
     <main className="main-area">
