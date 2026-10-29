@@ -93,6 +93,10 @@ export async function migrate() {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'admin',
       is_active INTEGER NOT NULL DEFAULT 1,
+      contact_phone TEXT NOT NULL DEFAULT '',
+      profile_photo_content_type TEXT,
+      profile_photo_file_name TEXT,
+      profile_photo_data ${usePostgres ? 'BYTEA' : 'BLOB'},
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, email)
     );
@@ -463,6 +467,9 @@ export async function migrate() {
     for (const [column, definition] of [['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificates' AND column_name = ?", column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
     }
+    for (const [column, definition] of [['contact_phone', "TEXT NOT NULL DEFAULT ''"], ['profile_photo_content_type', 'TEXT'], ['profile_photo_file_name', 'TEXT'], ['profile_photo_data', 'BYTEA']]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = ?", column)) await db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`)
+    }
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_capacity'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_capacity INTEGER')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_deadline'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_deadline TEXT')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_open'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_open INTEGER NOT NULL DEFAULT 0')
@@ -504,6 +511,9 @@ export async function migrate() {
     if (!schoolColumns.some(column => column.name === 'logo_data')) await db.exec('ALTER TABLE schools ADD COLUMN logo_data BLOB')
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
+    for (const [column, definition] of [['contact_phone', "TEXT NOT NULL DEFAULT ''"], ['profile_photo_content_type', 'TEXT'], ['profile_photo_file_name', 'TEXT'], ['profile_photo_data', 'BLOB']]) {
+      if (!userColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`)
+    }
     const courseColumns = await db.all('PRAGMA table_info(courses)')
     if (!courseColumns.some(column => column.name === 'is_active')) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
     const assessmentColumns = await db.all('PRAGMA table_info(grade_assessments)')
@@ -538,6 +548,7 @@ export async function migrate() {
     await db.run("UPDATE school_certificates SET status = 'Anulada', annul_note = 'Documento anterior al proceso de aprobación rectoral' WHERE rector_name = '' AND status = 'Emitida'")
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 18)
   }
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 19)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

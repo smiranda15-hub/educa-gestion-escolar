@@ -200,6 +200,54 @@ async function route(request, response) {
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
 
+  if (url.pathname === '/api/profile' && method === 'GET') {
+    const account = await db.get('SELECT full_name AS name, email, role, contact_phone AS phone, profile_photo_data AS photo FROM users WHERE id = ? AND school_id = ?', user.id, user.school_id)
+    let hasPhoto = Boolean(account?.photo)
+    if (user.role === 'estudiante') {
+      const linked = await db.all(`SELECT st.photo_data AS photo FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.user_id = ? AND st.school_id = ? AND us.relationship = 'estudiante' ORDER BY st.full_name LIMIT 2`, user.id, user.school_id)
+      hasPhoto = linked.length === 1 && Boolean(linked[0].photo)
+    }
+    return json(response, 200, { profile: { name: account.name, email: account.email, role: account.role, phone: account.phone || '', hasPhoto } })
+  }
+  if (url.pathname === '/api/profile/photo' && method === 'GET') {
+    let photo
+    if (user.role === 'estudiante') {
+      const linked = await db.all(`SELECT st.photo_data AS data, st.photo_content_type AS "contentType" FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.user_id = ? AND st.school_id = ? AND us.relationship = 'estudiante' ORDER BY st.full_name LIMIT 2`, user.id, user.school_id)
+      if (linked.length === 1) photo = linked[0]
+    } else photo = await db.get('SELECT profile_photo_data AS data, profile_photo_content_type AS "contentType" FROM users WHERE id = ? AND school_id = ?', user.id, user.school_id)
+    if (!photo?.data || !['image/jpeg', 'image/png', 'image/webp'].includes(photo.contentType)) return json(response, 404, { error: 'No hay una foto de perfil configurada.' })
+    response.writeHead(200, { 'Content-Type': photo.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
+    return response.end(photo.data)
+  }
+  if (url.pathname === '/api/profile' && method === 'PATCH') {
+    const body = await readLargeJsonBody(request, 3 * 1024 * 1024)
+    const phone = String(body.phone || '').trim()
+    const photo = body.photo ? parseStudentPhoto(body.photo) : null
+    if (phone.length > 25 || phone && !/^[+\d\s().-]{5,25}$/.test(phone)) return json(response, 400, { error: 'Revisa el teléfono de contacto.' })
+    if (body.photo && !photo) return json(response, 400, { error: 'La foto debe ser JPG, PNG o WEBP válida y no superar 2 MB.' })
+    if (body.removePhoto !== true && !photo && !Object.hasOwn(body, 'phone')) return json(response, 400, { error: 'No hay cambios para guardar.' })
+    if (user.role === 'estudiante' && (photo || body.removePhoto === true)) {
+      const linked = await db.all(`SELECT st.id FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.user_id = ? AND st.school_id = ? AND us.relationship = 'estudiante' ORDER BY st.full_name LIMIT 2`, user.id, user.school_id)
+      if (linked.length !== 1) return json(response, 409, { error: 'La cuenta de estudiante no tiene un único registro vinculado. Contacta a secretaría.' })
+      await db.run('UPDATE users SET contact_phone = ? WHERE id = ? AND school_id = ?', phone, user.id, user.school_id)
+      if (photo) await db.run('UPDATE students SET photo_content_type = ?, photo_file_name = ?, photo_data = ? WHERE id = ? AND school_id = ?', photo.contentType, photo.fileName, photo.data, linked[0].id, user.school_id)
+      else await db.run('UPDATE students SET photo_content_type = NULL, photo_file_name = NULL, photo_data = NULL WHERE id = ? AND school_id = ?', linked[0].id, user.school_id)
+    } else {
+      if (photo) await db.run('UPDATE users SET contact_phone = ?, profile_photo_content_type = ?, profile_photo_file_name = ?, profile_photo_data = ? WHERE id = ? AND school_id = ?', phone, photo.contentType, photo.fileName, photo.data, user.id, user.school_id)
+      else if (body.removePhoto === true) await db.run('UPDATE users SET contact_phone = ?, profile_photo_content_type = NULL, profile_photo_file_name = NULL, profile_photo_data = NULL WHERE id = ? AND school_id = ?', phone, user.id, user.school_id)
+      else await db.run('UPDATE users SET contact_phone = ? WHERE id = ? AND school_id = ?', phone, user.id, user.school_id)
+    }
+    await logAudit(user.school_id, user.id, 'profile_updated')
+    const account = await db.get('SELECT full_name AS name, email, role, contact_phone AS phone FROM users WHERE id = ? AND school_id = ?', user.id, user.school_id)
+    const currentPhoto = user.role === 'estudiante'
+      ? await db.get(`SELECT st.photo_data AS photo FROM user_students us JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND st.school_id = ? AND us.relationship = 'estudiante' LIMIT 1`, user.id, user.school_id)
+      : await db.get('SELECT profile_photo_data AS photo FROM users WHERE id = ? AND school_id = ?', user.id, user.school_id)
+    return json(response, 200, { profile: { ...account, hasPhoto: Boolean(currentPhoto?.photo) } })
+  }
+
   if (url.pathname === '/api/audit-log' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar la bitácora.' })
     const action = String(url.searchParams.get('action') || '').trim().slice(0, 100).toLowerCase()
