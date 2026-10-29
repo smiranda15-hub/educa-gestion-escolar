@@ -145,7 +145,7 @@ async function route(request, response) {
     const date = String(url.searchParams.get('date') || '')
     if (!validDate(date)) return json(response, 400, { error: 'La fecha del panel no es válida.' })
     const activeStudents = Number((await db.get("SELECT COUNT(*) AS count FROM students WHERE school_id = ? AND status = 'Activo'", user.school_id)).count)
-    const courses = Number((await db.get('SELECT COUNT(*) AS count FROM courses WHERE school_id = ?', user.school_id)).count)
+    const courses = Number((await db.get('SELECT COUNT(*) AS count FROM courses WHERE school_id = ? AND is_active = 1', user.school_id)).count)
     const rows = await db.all(`SELECT status, COUNT(*) AS count FROM attendance_records
       WHERE school_id = ? AND attendance_date = ? GROUP BY status`, user.school_id, date)
     const attendance = { total: 0, present: 0, absent: 0, late: 0, justified: 0, rate: null }
@@ -300,7 +300,7 @@ async function route(request, response) {
 
   if (url.pathname === '/api/courses' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar los cursos.' })
-    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear",
+    const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear", c.is_active AS "isActive",
       COUNT(DISTINCT ct.user_id) AS "teacherCount"
       FROM courses c LEFT JOIN course_teachers ct ON ct.course_id = c.id
       WHERE c.school_id = ? GROUP BY c.id ORDER BY c.academic_year DESC, c.grade`, user.school_id)
@@ -317,9 +317,54 @@ async function route(request, response) {
     if (name.length < 2 || name.length > 80 || grade.length < 2 || grade.length > 40 || !/^\d{4}-\d{4}$/.test(academicYear)) return json(response, 400, { error: 'Revisa el curso, el grado y el año lectivo (AAAA-AAAA).' })
     const id = randomUUID()
     try { await db.run('INSERT INTO courses (id, school_id, name, grade, academic_year) VALUES (?, ?, ?, ?, ?)', id, user.school_id, name, grade, academicYear) }
-    catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe un curso para ese grado y año lectivo.' }); throw error }
+    catch (error) {
+      if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) {
+        const archived = await db.get('SELECT id FROM courses WHERE school_id = ? AND academic_year = ? AND grade = ? AND is_active = 0', user.school_id, academicYear, grade)
+        if (archived) {
+          await db.run('UPDATE courses SET name = ?, is_active = 1 WHERE id = ? AND school_id = ?', name, archived.id, user.school_id)
+          await logAudit(user.school_id, user.id, 'course_reactivated')
+          return json(response, 200, { course: { id: archived.id, name, grade, academicYear, isActive: 1 }, restored: true })
+        }
+        return json(response, 409, { error: 'Ya existe un curso para ese grado y año lectivo.' })
+      }
+      throw error
+    }
     await logAudit(user.school_id, user.id, 'course_created')
     return json(response, 201, { course: { id, name, grade, academicYear, teachers: [] } })
+  }
+  const courseRecordMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})$/i)
+  if (courseRecordMatch && method === 'PATCH') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar cursos.' })
+    const id = courseRecordMatch[1]
+    const current = await db.get('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE id = ? AND school_id = ?', id, user.school_id)
+    if (!current) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+    const body = await readBody(request)
+    const name = String(body.name || '').trim()
+    const grade = String(body.grade || '').trim()
+    const academicYear = String(body.academicYear || '').trim()
+    if (name.length < 2 || name.length > 80 || grade.length < 2 || grade.length > 40 || !/^\d{4}-\d{4}$/.test(academicYear)) return json(response, 400, { error: 'Revisa el nombre, grado y año lectivo (AAAA-AAAA).' })
+    if ((grade !== current.grade || academicYear !== current.academicYear) && (Number((await db.get('SELECT COUNT(*) AS count FROM attendance_records WHERE course_id = ?', id)).count) > 0 || Number((await db.get('SELECT COUNT(*) AS count FROM grade_assessments WHERE course_id = ?', id)).count) > 0)) return json(response, 409, { error: 'Este curso ya tiene asistencia o evaluaciones. Para conservar su historial, solo puedes cambiar el nombre; crea otro curso si cambia el grado o año.' })
+    try { await db.run('UPDATE courses SET name = ?, grade = ?, academic_year = ? WHERE id = ? AND school_id = ?', name, grade, academicYear, id, user.school_id) }
+    catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe otro curso para ese grado y año lectivo.' }); throw error }
+    await logAudit(user.school_id, user.id, 'course_updated')
+    return json(response, 200, { course: { ...current, name, grade, academicYear } })
+  }
+  if (courseRecordMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para dar de baja cursos.' })
+    const result = await db.run('UPDATE courses SET is_active = 0 WHERE id = ? AND school_id = ? AND is_active = 1', courseRecordMatch[1], user.school_id)
+    if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos un curso activo con ese identificador.' })
+    await logAudit(user.school_id, user.id, 'course_archived')
+    return json(response, 200, { archived: true })
+  }
+  const courseStatusMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/status$/i)
+  if (courseStatusMatch && method === 'PATCH') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar el estado del curso.' })
+    const body = await readBody(request)
+    if (typeof body.active !== 'boolean') return json(response, 400, { error: 'Indica si el curso debe quedar activo.' })
+    const result = await db.run('UPDATE courses SET is_active = ? WHERE id = ? AND school_id = ?', body.active ? 1 : 0, courseStatusMatch[1], user.school_id)
+    if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+    await logAudit(user.school_id, user.id, body.active ? 'course_reactivated' : 'course_archived')
+    return json(response, 200, { id: courseStatusMatch[1], active: body.active })
   }
   const courseTeacherMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/teachers$/i)
   if (courseTeacherMatch && method === 'POST') {
@@ -327,7 +372,7 @@ async function route(request, response) {
     const body = await readBody(request)
     const teacherId = String(body.teacherId || '')
     const subject = String(body.subject || '').trim()
-    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseTeacherMatch[1], user.school_id)
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseTeacherMatch[1], user.school_id)
     const teacher = await db.get("SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'docente' AND is_active = 1", teacherId, user.school_id)
     if (!course || !teacher) return json(response, 404, { error: 'No encontramos el curso o el docente activo en este colegio.' })
     if (subject.length < 2 || subject.length > 80) return json(response, 400, { error: 'Escribe una asignatura válida.' })
@@ -343,7 +388,7 @@ async function route(request, response) {
     const originalSubject = String(body.originalSubject || '').trim()
     const teacherId = String(body.teacherId || '')
     const subject = String(body.subject || '').trim()
-    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseTeacherMatch[1], user.school_id)
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseTeacherMatch[1], user.school_id)
     const teacher = await db.get("SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'docente' AND is_active = 1 AND deleted_at IS NULL", teacherId, user.school_id)
     const assignment = await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ? AND subject = ?', courseTeacherMatch[1], originalTeacherId, originalSubject)
     if (!course || !teacher || !assignment) return json(response, 404, { error: 'No encontramos el curso, la asignación o el docente activo.' })
@@ -369,14 +414,14 @@ async function route(request, response) {
     const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear", ct.subject,
       (SELECT COUNT(*) FROM students st WHERE st.school_id = c.school_id AND st.grade = c.grade AND st.status = 'Activo') AS "studentCount"
       FROM course_teachers ct JOIN courses c ON c.id = ct.course_id
-      WHERE ct.user_id = ? AND c.school_id = ? ORDER BY c.academic_year DESC, c.grade, ct.subject`, user.id, user.school_id)
+      WHERE ct.user_id = ? AND c.school_id = ? AND c.is_active = 1 ORDER BY c.academic_year DESC, c.grade, ct.subject`, user.id, user.school_id)
     return json(response, 200, { courses: courses.map(course => ({ ...course, studentCount: Number(course.studentCount) })) })
   }
   const teacherRosterMatch = url.pathname.match(/^\/api\/teacher\/courses\/([0-9a-f-]{36})\/students$/i)
   if (teacherRosterMatch && method === 'GET') {
     if (user.role !== 'docente') return json(response, 403, { error: 'Este acceso es solo para docentes.' })
     const course = await db.get(`SELECT c.id, c.grade FROM course_teachers ct JOIN courses c ON c.id = ct.course_id
-      WHERE c.id = ? AND ct.user_id = ? AND c.school_id = ?`, teacherRosterMatch[1], user.id, user.school_id)
+      WHERE c.id = ? AND ct.user_id = ? AND c.school_id = ? AND c.is_active = 1`, teacherRosterMatch[1], user.id, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso asignado a tu cuenta.' })
     const students = await db.all("SELECT id, full_name AS name, grade, status FROM students WHERE school_id = ? AND grade = ? AND status = 'Activo' ORDER BY full_name", user.school_id, course.grade)
     return json(response, 200, { students })
@@ -387,7 +432,7 @@ async function route(request, response) {
     const courseId = String(url.searchParams.get('courseId') || '')
     const attendanceDate = String(url.searchParams.get('date') || '')
     if (!validDate(attendanceDate)) return json(response, 400, { error: 'Selecciona una fecha válida.' })
-    const course = await db.get('SELECT id, grade, name, academic_year AS "academicYear" FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    const course = await db.get('SELECT id, grade, name, academic_year AS "academicYear" FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
     const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, st.status,
@@ -408,7 +453,7 @@ async function route(request, response) {
     if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos un estudiante para guardar.' })
     const records = body.records.map(record => ({ studentId: String(record.studentId || ''), status: String(record.status || '') }))
     if (records.some(record => !/^[0-9a-f-]{36}$/i.test(record.studentId) || !allowedStatuses.has(record.status)) || new Set(records.map(record => record.studentId)).size !== records.length) return json(response, 400, { error: 'Revisa los estados de asistencia seleccionados; no se permiten estudiantes repetidos.' })
-    const course = await db.get('SELECT id, grade FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    const course = await db.get('SELECT id, grade FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
     for (const record of records) {
@@ -430,7 +475,7 @@ async function route(request, response) {
     const assignments = await db.all(`SELECT c.id AS "courseId", c.name AS "courseName", c.grade,
       c.academic_year AS "academicYear", ct.subject, u.full_name AS "teacherName"
       FROM course_teachers ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id
-      WHERE c.school_id = ? AND (? <> 'docente' OR ct.user_id = ?)
+      WHERE c.school_id = ? AND c.is_active = 1 AND (? <> 'docente' OR ct.user_id = ?)
       ORDER BY c.academic_year DESC, c.grade, ct.subject, u.full_name`, user.school_id, user.role, user.id)
     return json(response, 200, { assignments })
   }
@@ -439,7 +484,7 @@ async function route(request, response) {
     const courseId = String(url.searchParams.get('courseId') || '')
     const subject = String(url.searchParams.get('subject') || '')
     const period = String(url.searchParams.get('period') || '')
-    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course || !subject || !period) return json(response, 400, { error: 'Selecciona curso, asignatura y periodo.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
@@ -457,7 +502,7 @@ async function route(request, response) {
     const period = String(body.period || '').trim()
     const title = String(body.title || '').trim()
     const maxScore = Number(body.maxScore)
-    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
@@ -491,7 +536,7 @@ async function route(request, response) {
     if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos una calificación para guardar.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.max_score AS "maxScore", c.grade
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
-      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeScoresMatch[1], user.school_id, user.school_id)
+      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.is_active = 1`, gradeScoresMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)

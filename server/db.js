@@ -126,6 +126,7 @@ export async function migrate() {
       name TEXT NOT NULL,
       grade TEXT NOT NULL,
       academic_year TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, academic_year, grade)
     );
@@ -174,9 +175,12 @@ export async function migrate() {
   `)
   if (usePostgres) {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'deleted_at'")) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'courses' AND column_name = 'is_active'")) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
   } else {
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
+    const courseColumns = await db.all('PRAGMA table_info(courses)')
+    if (!courseColumns.some(column => column.name === 'is_active')) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
@@ -184,6 +188,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 4)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 5)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 6)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 7)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
