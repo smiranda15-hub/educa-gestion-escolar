@@ -796,7 +796,7 @@ async function route(request, response) {
     if (!validDate(attendanceDate)) return json(response, 400, { error: 'Selecciona una fecha válida.' })
     if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos un estudiante para guardar.' })
     const records = body.records.map(record => ({ studentId: String(record.studentId || ''), status: String(record.status || '') }))
-    if (records.some(record => !/^[0-9a-f-]{36}$/i.test(record.studentId) || !allowedStatuses.has(record.status)) || new Set(records.map(record => record.studentId)).size !== records.length) return json(response, 400, { error: 'Revisa los estados de asistencia seleccionados; no se permiten estudiantes repetidos.' })
+    if (records.some(record => !/^[0-9a-f-]{36}$/i.test(record.studentId) || (record.status && !allowedStatuses.has(record.status))) || new Set(records.map(record => record.studentId)).size !== records.length) return json(response, 400, { error: 'Revisa los estados de asistencia seleccionados; no se permiten estudiantes repetidos.' })
     const course = await db.get('SELECT id, grade FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
@@ -804,11 +804,17 @@ async function route(request, response) {
       if (!await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND grade = ? AND status = 'Activo'", record.studentId, user.school_id, course.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este grupo activo.' })
     }
     await db.transaction(async tx => {
-      for (const record of records) await tx.run(`INSERT INTO attendance_records (id, school_id, course_id, student_id, attendance_date, status, marked_by, marked_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(course_id, student_id, attendance_date) DO UPDATE SET
-          status = excluded.status, marked_by = excluded.marked_by, marked_at = excluded.marked_at`,
-        randomUUID(), user.school_id, course.id, record.studentId, attendanceDate, record.status, user.id, new Date().toISOString())
+      for (const record of records) {
+        if (!record.status) {
+          await tx.run('DELETE FROM attendance_records WHERE school_id = ? AND course_id = ? AND student_id = ? AND attendance_date = ?', user.school_id, course.id, record.studentId, attendanceDate)
+          continue
+        }
+        await tx.run(`INSERT INTO attendance_records (id, school_id, course_id, student_id, attendance_date, status, marked_by, marked_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(course_id, student_id, attendance_date) DO UPDATE SET
+            status = excluded.status, marked_by = excluded.marked_by, marked_at = excluded.marked_at`,
+          randomUUID(), user.school_id, course.id, record.studentId, attendanceDate, record.status, user.id, new Date().toISOString())
+      }
     })
     await logAudit(user.school_id, user.id, 'attendance_saved')
     return json(response, 200, { saved: records.length })
