@@ -354,6 +354,83 @@ async function route(request, response) {
       : await db.all('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE school_id = ? AND is_active = 1 ORDER BY academic_year DESC, grade, name', user.school_id)
     return json(response, 200, { courses })
   }
+  if (url.pathname === '/api/activities' && method === 'GET') {
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes acceso a las actividades escolares.' })
+    const family = ['estudiante', 'acudiente'].includes(user.role)
+    let sql = `SELECT e.id, e.title, e.details, e.event_date AS "eventDate", e.start_time AS "startTime", e.end_time AS "endTime",
+      e.course_id AS "courseId", c.name AS "courseName", c.grade, e.registration_capacity AS capacity,
+      e.registration_deadline AS "registrationDeadline", e.registration_open AS "registrationOpen",
+      (SELECT COUNT(*) FROM activity_registrations ar WHERE ar.event_id = e.id AND ar.school_id = e.school_id AND ar.status = 'Inscrito') AS "registrationCount"
+      FROM school_events e LEFT JOIN courses c ON c.id = e.course_id WHERE e.school_id = ? AND e.event_type = 'Actividad'`
+    const params = [user.school_id]
+    if (family) {
+      sql += ` AND (e.course_id IS NULL OR EXISTS (SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.user_id = ? AND st.school_id = e.school_id AND st.status = 'Activo' AND st.grade = c.grade AND (
+          EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
+          OR NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))))`
+      params.push(user.id)
+    } else if (user.role === 'docente') {
+      sql += ` AND (e.course_id IS NULL OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = e.course_id AND ct.user_id = ?))`
+      params.push(user.id)
+    }
+    sql += ' ORDER BY e.event_date, e.start_time, e.title LIMIT 250'
+    const events = await db.all(sql, ...params)
+    const linked = family ? await db.all(`SELECT st.id, st.full_name AS name, st.grade FROM user_students us JOIN students st ON st.id = us.student_id
+      WHERE us.user_id = ? AND st.school_id = ? AND st.status = 'Activo' ORDER BY st.full_name`, user.id, user.school_id) : []
+    const activities = await Promise.all(events.map(async event => ({ ...event,
+      registrationCount: Number(event.registrationCount), registrationOpen: Boolean(event.registrationOpen),
+      registrations: family ? await db.all(`SELECT ar.student_id AS "studentId", ar.status FROM activity_registrations ar
+        JOIN user_students us ON us.student_id = ar.student_id AND us.user_id = ? WHERE ar.event_id = ? AND ar.status = 'Inscrito'`, user.id, event.id) : undefined,
+    })))
+    return json(response, 200, { activities, students: family ? linked : undefined })
+  }
+  const activityRegistrationListMatch = url.pathname.match(/^\/api\/activities\/([0-9a-f-]{36})\/registrations$/i)
+  if (activityRegistrationListMatch && method === 'GET') {
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar inscripciones.' })
+    const event = await db.get('SELECT id, course_id AS "courseId" FROM school_events WHERE id = ? AND school_id = ? AND event_type = ?', activityRegistrationListMatch[1], user.school_id, 'Actividad')
+    if (!event) return json(response, 404, { error: 'No encontramos esa actividad.' })
+    if (user.role === 'docente' && (!event.courseId || !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', event.courseId, user.id))) return json(response, 403, { error: 'No tienes acceso a esta actividad.' })
+    const registrations = await db.all(`SELECT ar.id, st.full_name AS "studentName", st.grade, ar.status, ar.created_at AS "createdAt"
+      FROM activity_registrations ar JOIN students st ON st.id = ar.student_id WHERE ar.school_id = ? AND ar.event_id = ? ORDER BY ar.created_at DESC`, user.school_id, event.id)
+    return json(response, 200, { registrations })
+  }
+  const activityRegisterMatch = url.pathname.match(/^\/api\/activities\/([0-9a-f-]{36})\/register$/i)
+  if (activityRegisterMatch && method === 'POST') {
+    if (!['estudiante', 'acudiente'].includes(user.role)) return json(response, 403, { error: 'Solo estudiantes y acudientes pueden inscribirse.' })
+    const body = await readBody(request), studentId = String(body.studentId || '')
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Selecciona un estudiante vinculado a tu cuenta.' })
+    const id = randomUUID(), eventId = activityRegisterMatch[1]
+    try {
+      await db.transaction(async tx => {
+        const event = await tx.get(`SELECT id, course_id AS "courseId", event_date AS "eventDate", registration_capacity AS capacity, registration_deadline AS deadline, registration_open AS "registrationOpen"
+          FROM school_events WHERE id = ? AND school_id = ? AND event_type = ?${databaseType === 'postgres' ? ' FOR UPDATE' : ''}`, eventId, user.school_id, 'Actividad')
+        const today = new Date().toISOString().slice(0, 10)
+        if (!event || !event.registrationOpen || event.eventDate < today || (event.deadline && event.deadline < today)) throw Object.assign(new Error('La inscripción está cerrada.'), { status: 400 })
+        const student = await tx.get("SELECT id, grade FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)
+        if (!student) throw Object.assign(new Error('El estudiante no está activo en este colegio.'), { status: 403 })
+        if (event.courseId && !await tx.get(`SELECT 1 FROM courses c WHERE c.id = ? AND c.grade = ? AND c.school_id = ? AND (
+          EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
+          OR NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.status = 'Activa'))`, event.courseId, student.grade, user.school_id, studentId, studentId)) throw Object.assign(new Error('Esta actividad no corresponde al curso del estudiante.'), { status: 403 })
+        const existing = await tx.get('SELECT id, status FROM activity_registrations WHERE event_id = ? AND student_id = ?', eventId, studentId)
+        if (existing?.status === 'Inscrito') throw Object.assign(new Error('El estudiante ya está inscrito.'), { status: 409 })
+        const count = Number((await tx.get("SELECT COUNT(*) AS count FROM activity_registrations WHERE event_id = ? AND status = 'Inscrito'", eventId)).count)
+        if (event.capacity && count >= Number(event.capacity)) throw Object.assign(new Error('La actividad ya no tiene cupos disponibles.'), { status: 409 })
+        if (existing) await tx.run("UPDATE activity_registrations SET status = 'Inscrito', created_by = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?", user.id, existing.id)
+        else await tx.run('INSERT INTO activity_registrations (id, school_id, event_id, student_id, created_by) VALUES (?, ?, ?, ?, ?)', id, user.school_id, eventId, studentId, user.id)
+      })
+    } catch (error) { if (error.status) return json(response, error.status, { error: error.message }); throw error }
+    await logAudit(user.school_id, user.id, 'activity_student_registered')
+    return json(response, 201, { registered: true })
+  }
+  const activityCancelMatch = url.pathname.match(/^\/api\/activities\/([0-9a-f-]{36})\/registrations\/([0-9a-f-]{36})$/i)
+  if (activityCancelMatch && method === 'DELETE') {
+    const [, eventId, studentId] = activityCancelMatch
+    const staff = ['admin', 'rectoria', 'coordinacion', 'secretaria'].includes(user.role)
+    if (!staff && (!['estudiante', 'acudiente'].includes(user.role) || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId))) return json(response, 403, { error: 'No puedes cancelar esta inscripción.' })
+    await db.run("UPDATE activity_registrations SET status = 'Cancelado' WHERE school_id = ? AND event_id = ? AND student_id = ? AND status = 'Inscrito'", user.school_id, eventId, studentId)
+    await logAudit(user.school_id, user.id, 'activity_registration_cancelled')
+    return json(response, 200, { cancelled: true })
+  }
   if (url.pathname === '/api/calendar' && method === 'GET') {
     const from = String(url.searchParams.get('from') || '')
     const to = String(url.searchParams.get('to') || '')
@@ -387,7 +464,11 @@ async function route(request, response) {
     const endTime = String(body.endTime || '')
     const eventType = String(body.eventType || 'Evento')
     const courseId = String(body.courseId || '')
-    if (title.length < 2 || title.length > 120 || details.length > 1500 || !validDate(eventDate) || (startTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)) || (endTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)) || (startTime && endTime && endTime <= startTime) || !['Evento', 'Reunión', 'Evaluación', 'Entrega', 'Festivo', 'Institucional'].includes(eventType)) return json(response, 400, { error: 'Revisa el título, fecha, horario y tipo del evento.' })
+    const rawCapacity = body.registrationCapacity === '' || body.registrationCapacity == null ? null : Number(body.registrationCapacity)
+    const registrationCapacity = eventType === 'Actividad' && Number.isInteger(rawCapacity) && rawCapacity > 0 && rawCapacity <= 10000 ? rawCapacity : null
+    const registrationDeadline = body.registrationDeadline ? String(body.registrationDeadline) : null
+    const registrationOpen = eventType === 'Actividad' && body.registrationOpen === true
+    if (title.length < 2 || title.length > 120 || details.length > 1500 || !validDate(eventDate) || (startTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)) || (endTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)) || (startTime && endTime && endTime <= startTime) || !['Evento', 'Actividad', 'Reunión', 'Evaluación', 'Entrega', 'Festivo', 'Institucional'].includes(eventType) || (body.registrationCapacity != null && body.registrationCapacity !== '' && registrationCapacity == null) || (registrationDeadline && (!validDate(registrationDeadline) || registrationDeadline > eventDate)) || (registrationOpen && eventType !== 'Actividad')) return json(response, 400, { error: 'Revisa el título, fecha, horario, tipo, cupo y fecha límite.' })
     let course = null
     if (courseId) {
       course = await db.get('SELECT id, grade, academic_year AS "academicYear", name FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
@@ -406,7 +487,7 @@ async function route(request, response) {
       recipients = (await db.all('SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id <> ?', user.school_id, user.id)).map(row => row.id)
     }
     await db.transaction(async tx => {
-      await tx.run('INSERT INTO school_events (id, school_id, course_id, title, details, event_date, start_time, end_time, event_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course?.id || null, title, details, eventDate, startTime, endTime, eventType, user.id)
+      await tx.run('INSERT INTO school_events (id, school_id, course_id, title, details, event_date, start_time, end_time, event_type, registration_capacity, registration_deadline, registration_open, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course?.id || null, title, details, eventDate, startTime, endTime, eventType, registrationCapacity, registrationDeadline, registrationOpen ? 1 : 0, user.id)
       for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, event_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient, id, `Nuevo evento: ${title}`, `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ''}`, 'calendar')
     })
     await logAudit(user.school_id, user.id, 'calendar_event_created')
@@ -601,7 +682,7 @@ async function route(request, response) {
 
   if (url.pathname === '/api/admin/backup' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede descargar el respaldo del colegio.' })
-    const [school, users, students, courses, assignments, enrollments, attendance, assessments, grades, requests, events, schedule, observations, periods, justifications, communications, audit] = await Promise.all([
+    const [school, users, students, courses, assignments, enrollments, attendance, assessments, grades, requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, certificates, audit] = await Promise.all([
       db.get('SELECT id, slug, name, contact_email AS "contactEmail", contact_phone AS "contactPhone", address, primary_color AS "primaryColor" FROM schools WHERE id = ?', user.school_id),
       db.all('SELECT id, email, full_name AS name, role, is_active AS active FROM users WHERE school_id = ? AND deleted_at IS NULL', user.school_id),
       db.all('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status FROM students WHERE school_id = ?', user.school_id),
@@ -612,17 +693,19 @@ async function route(request, response) {
       db.all('SELECT id, course_id AS "courseId", subject, period, title, due_at AS "dueAt", max_score AS "maxScore", delivery_mode AS "deliveryMode" FROM grade_assessments WHERE school_id = ?', user.school_id),
       db.all('SELECT sg.assessment_id AS "assessmentId", sg.student_id AS "studentId", sg.score, sg.comment FROM student_grades sg JOIN grade_assessments a ON a.id = sg.assessment_id WHERE a.school_id = ?', user.school_id),
       db.all('SELECT id, student_name AS "studentName", document, grade_requested AS "gradeRequested", academic_year AS "academicYear", status, pending_documents AS "pendingDocuments" FROM enrollment_requests WHERE school_id = ?', user.school_id),
-      db.all('SELECT id, course_id AS "courseId", title, details, event_date AS "eventDate", start_time AS "startTime", end_time AS "endTime", event_type AS "eventType" FROM school_events WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, course_id AS "courseId", title, details, event_date AS "eventDate", start_time AS "startTime", end_time AS "endTime", event_type AS "eventType", registration_capacity AS capacity, registration_deadline AS "registrationDeadline", registration_open AS "registrationOpen" FROM school_events WHERE school_id = ?', user.school_id),
       db.all('SELECT id, course_id AS "courseId", teacher_id AS "teacherId", subject, weekday, start_time AS "startTime", end_time AS "endTime", room FROM class_schedule_slots WHERE school_id = ?', user.school_id),
       db.all('SELECT id, student_id AS "studentId", category, severity, details, confidential, created_at AS "createdAt" FROM student_observations WHERE school_id = ?', user.school_id),
       db.all('SELECT academic_year AS "academicYear", name, start_date AS "startDate", end_date AS "endDate", is_active AS active FROM academic_periods WHERE school_id = ?', user.school_id),
       db.all('SELECT id, student_id AS "studentId", attendance_date AS "attendanceDate", reason, status, reviewer_note AS "reviewerNote", support_file_name AS "supportFileName", created_at AS "createdAt" FROM attendance_justifications WHERE school_id = ?', user.school_id),
       db.all('SELECT id, course_id AS "courseId", audience, title, body, created_by AS "createdBy", created_at AS "createdAt" FROM communications WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, event_id AS "eventId", student_id AS "studentId", status, created_by AS "createdBy", created_at AS "createdAt" FROM activity_registrations WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, student_id AS "studentId", certificate_number AS "certificateNumber", certificate_type AS "certificateType", student_name AS "studentName", grade, academic_year AS "academicYear", issued_by AS "issuedBy", created_at AS "issuedAt" FROM school_certificates WHERE school_id = ?', user.school_id),
       db.all('SELECT actor_user_id AS "actorUserId", action, created_at AS "createdAt" FROM audit_log WHERE school_id = ? ORDER BY id', user.school_id),
     ])
     const date = new Date().toISOString()
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="educa-respaldo-${school.slug}-${date.slice(0, 10)}.json"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-    response.end(JSON.stringify({ format: 'educa-school-backup-v1', generatedAt: date, school, users, students, courses, assignments, enrollments, attendance, assessments, grades, enrollmentRequests: requests, events, schedule, observations, periods, justifications, communications, audit }, null, 2))
+    response.end(JSON.stringify({ format: 'educa-school-backup-v1', generatedAt: date, school, users, students, courses, assignments, enrollments, attendance, assessments, grades, enrollmentRequests: requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, certificates, audit }, null, 2))
     await logAudit(user.school_id, user.id, 'school_backup_downloaded')
     return
   }
@@ -936,6 +1019,59 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       FROM user_students us JOIN students st ON st.id = us.student_id
       WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
     return json(response, 200, { students })
+  }
+  if (url.pathname === '/api/portal/digital-card' && method === 'GET') {
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'El carné digital está disponible para cuentas de estudiante y acudiente.' })
+    const students = await db.all(`SELECT st.id, st.full_name AS "studentName", st.grade, st.status, us.relationship,
+      s.name AS "schoolName", s.primary_color AS "primaryColor", s.logo_content_type AS "logoContentType",
+      COALESCE(en.academic_year, '') AS "academicYear"
+      FROM user_students us JOIN students st ON st.id = us.student_id JOIN schools s ON s.id = st.school_id
+      LEFT JOIN student_enrollments en ON en.id = (SELECT e.id FROM student_enrollments e WHERE e.student_id = st.id AND e.school_id = st.school_id AND e.status = 'Activa' ORDER BY e.start_date DESC LIMIT 1)
+      WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
+    return json(response, 200, { cards: students.map(student => ({ ...student, hasLogo: Boolean(student.logoContentType) })) })
+  }
+  const certificateRoles = ['admin', 'rectoria', 'coordinacion', 'secretaria']
+  if (url.pathname === '/api/certificates/options' && method === 'GET') {
+    if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para emitir constancias.' })
+    const students = ['acudiente', 'estudiante'].includes(user.role)
+      ? await db.all("SELECT st.id, st.full_name AS name, st.grade, st.status FROM user_students us JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND st.school_id = ? AND st.status = 'Activo' ORDER BY st.full_name", user.id, user.school_id)
+      : await db.all("SELECT id, full_name AS name, grade, status FROM students WHERE school_id = ? AND status = 'Activo' ORDER BY full_name LIMIT 2000", user.school_id)
+    return json(response, 200, { students })
+  }
+  if (url.pathname === '/api/certificates' && method === 'GET') {
+    if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
+    const linkedOnly = ['acudiente', 'estudiante'].includes(user.role)
+    const history = await db.all(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
+      d.student_id AS "studentId", d.student_name AS "studentName", d.grade, d.academic_year AS "academicYear", d.created_at AS "issuedAt", s.name AS "schoolName"
+      FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.school_id = ? ${linkedOnly ? 'AND EXISTS (SELECT 1 FROM user_students us WHERE us.user_id = ? AND us.student_id = d.student_id)' : ''}
+      ORDER BY d.created_at DESC LIMIT 100`, ...(linkedOnly ? [user.school_id, user.id] : [user.school_id]))
+    return json(response, 200, { certificates: history })
+  }
+  const certificateMatch = url.pathname.match(/^\/api\/certificates\/([0-9a-f-]{36})$/i)
+  if (certificateMatch && method === 'GET') {
+    if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
+    const certificate = await db.get(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
+      d.student_id AS "studentId", d.student_name AS "studentName", d.grade, d.academic_year AS "academicYear", d.created_at AS "issuedAt",
+      s.name AS "schoolName", s.address, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone"
+      FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.id = ? AND d.school_id = ?`, certificateMatch[1], user.school_id)
+    if (!certificate) return json(response, 404, { error: 'No encontramos esa constancia.' })
+    if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, certificate.studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
+    return json(response, 200, { certificate })
+  }
+  if (url.pathname === '/api/certificates' && method === 'POST') {
+    if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para emitir constancias.' })
+    const body = await readBody(request), studentId = String(body.studentId || ''), type = String(body.certificateType || '')
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !['Constancia de estudio', 'Constancia de matrícula'].includes(type)) return json(response, 400, { error: 'Selecciona el estudiante y el tipo de constancia.' })
+    const student = await db.get("SELECT st.id, st.full_name AS name, st.grade, st.status, st.school_id AS schoolId, s.name AS schoolName, s.address, s.contact_email AS contactEmail, s.contact_phone AS contactPhone FROM students st JOIN schools s ON s.id = st.school_id WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo'", studentId, user.school_id)
+    if (!student) return json(response, 404, { error: 'No encontramos un estudiante activo en este colegio.' })
+    if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
+    const enrollment = await db.get(`SELECT academic_year AS "academicYear" FROM student_enrollments WHERE school_id = ? AND student_id = ? AND status = 'Activa' ORDER BY start_date DESC LIMIT 1`, user.school_id, studentId)
+    if (type === 'Constancia de matrícula' && !enrollment) return json(response, 409, { error: 'No hay una matrícula activa para emitir esta constancia.' })
+    const academicYear = enrollment?.academicYear || `${new Date().getFullYear()}`
+    const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`, id = randomUUID()
+    await db.run('INSERT INTO school_certificates (id, school_id, student_id, certificate_number, certificate_type, student_name, grade, academic_year, issued_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, student.id, certificateNumber, type, student.name, student.grade, academicYear, user.id)
+    await logAudit(user.school_id, user.id, 'school_certificate_issued')
+    return json(response, 201, { certificate: { id, certificateNumber, certificateType: type, studentId, studentName: student.name, grade: student.grade, academicYear, issuedAt, schoolName: student.schoolName, address: student.address, contactEmail: student.contactEmail, contactPhone: student.contactPhone } })
   }
   if (url.pathname === '/api/teachers' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar docentes.' })
