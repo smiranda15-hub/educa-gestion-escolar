@@ -9,7 +9,7 @@ import {
 import './style.css'
 
 const navGroups = [
-  { title: 'GENERAL', items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Calificaciones', icon: BookOpen }, { label: 'Boletines', icon: FileText }, { label: 'Trabajos', icon: ClipboardCheck }] },
+  { title: 'GENERAL', items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Calificaciones', icon: BookOpen }, { label: 'Boletines', icon: FileText }, { label: 'Mi aula', icon: ClipboardCheck }] },
   { title: 'GESTIÓN', items: [{ label: 'Usuarios y accesos', icon: LockKeyhole }, { label: 'Cursos y docentes', icon: GraduationCap }, { label: 'Mis cursos', icon: BookOpen }, { label: 'Comunicaciones', icon: Bell }, { label: 'Reportes', icon: FileText }] },
 ]
 
@@ -152,6 +152,7 @@ function App() {
   const [submissionsLoading, setSubmissionsLoading] = useState(false)
   const [workStudentId, setWorkStudentId] = useState('')
   const [portalAssignments, setPortalAssignments] = useState([])
+  const [portalCourseFilter, setPortalCourseFilter] = useState('Todos')
   const [portalAssignmentsLoading, setPortalAssignmentsLoading] = useState(false)
   const [portalAssignmentsError, setPortalAssignmentsError] = useState('')
   const [submissionBusyId, setSubmissionBusyId] = useState('')
@@ -169,6 +170,12 @@ function App() {
     ? [...new Set((reportCardOptions.publications || []).filter(item => item.academicYear === reportCardYear && item.isPublished).map(item => item.period))]
     : ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4']
   const selectedPublication = (reportCardOptions.publications || []).find(item => item.academicYear === reportCardYear && item.period === reportCardPeriod)
+  const portalStudent = portalStudents.find(student => student.id === workStudentId)
+  const portalCourseOptions = [...new Set(portalAssignments.map(item => `${item.courseName} · ${item.academicYear}`))]
+  const filteredPortalAssignments = portalAssignments.filter(item => portalCourseFilter === 'Todos' || `${item.courseName} · ${item.academicYear}` === portalCourseFilter)
+  const portalPendingCount = portalAssignments.filter(item => !item.submissionId).length
+  const portalSubmittedCount = portalAssignments.filter(item => item.submissionId).length
+  const portalGradedCount = portalAssignments.filter(item => item.score !== null).length
 
   const selectedSchool = schools.find(school => school.slug === loginSchool)
   const matchingSchools = schools.filter(school => `${school.name} ${school.slug}`.toLocaleLowerCase('es').includes(schoolSearch.trim().toLocaleLowerCase('es')))
@@ -184,6 +191,7 @@ function App() {
       setUser(result.user)
       setLoginSchool(result.user.school.slug)
       setAuthenticated(true)
+      setActive(['acudiente', 'estudiante'].includes(result.user.role) ? 'Mi aula' : 'Resumen')
       setLoginNotice('')
     } catch { setLoginError('No se pudo conectar con el servidor. Comprueba que esté en ejecución.') }
   }
@@ -197,7 +205,7 @@ function App() {
       setApiReady(true)
       setSetupRequired(setupResult.setupRequired)
       setSchools((schoolResult.schools || []).map(school => ({ ...school, initials: school.name.slice(0, 1).toLocaleUpperCase('es'), color: 'school-lilac', city: `Código: ${school.slug}` })))
-      if (session.ok) { const data = await session.json(); setUser(data.user); setAuthenticated(true) }
+      if (session.ok) { const data = await session.json(); setUser(data.user); setAuthenticated(true); setActive(['acudiente', 'estudiante'].includes(data.user.role) ? 'Mi aula' : 'Resumen') }
     }).catch(() => { if (mounted) setApiReady(false) }).finally(() => { if (mounted) setLoadingAuth(false) })
     return () => { mounted = false }
   }, [])
