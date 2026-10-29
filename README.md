@@ -44,6 +44,7 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 ### Usuarios y portales por rol
 
 - El administrador crea cuentas desde **Usuarios y accesos**, define el rol y una contraseña inicial; también puede activar o desactivar cuentas.
+- En **Configuración**, el administrador puede actualizar el nombre del colegio, correo, teléfono, dirección, color principal y logo (JPG, PNG o WEBP de hasta 1 MB). Los datos de identidad se separan por colegio; el logo se almacena en la base y su ruta requiere una sesión autenticada. La migración de columnas se aplica al iniciar el servidor.
 - Para crear un acudiente, primero registra al estudiante y luego asocia uno o más estudiantes activos. Para una cuenta de estudiante, asocia exactamente un registro.
 - Acudientes y estudiantes solo reciben los nombres, grados y estados de los registros que tienen asociados. La lista general de estudiantes está limitada a administración y secretaría.
 - Los docentes ven las funciones de sus cursos asignados; otros roles se limitan a los módulos habilitados para su perfil.

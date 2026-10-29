@@ -73,6 +73,13 @@ export async function migrate() {
       id TEXT PRIMARY KEY,
       slug TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
+      contact_email TEXT NOT NULL DEFAULT '',
+      contact_phone TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      primary_color TEXT NOT NULL DEFAULT '#6c70df',
+      logo_content_type TEXT,
+      logo_file_name TEXT,
+      logo_data ${usePostgres ? 'BYTEA' : 'BLOB'},
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
     CREATE TABLE IF NOT EXISTS users (
@@ -309,6 +316,13 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS communication_recipients_user_idx ON communication_recipients(user_id, read_at);
   `)
   if (usePostgres) {
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'contact_email'")) await db.exec("ALTER TABLE schools ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'contact_phone'")) await db.exec("ALTER TABLE schools ADD COLUMN contact_phone TEXT NOT NULL DEFAULT ''")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'address'")) await db.exec("ALTER TABLE schools ADD COLUMN address TEXT NOT NULL DEFAULT ''")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'primary_color'")) await db.exec("ALTER TABLE schools ADD COLUMN primary_color TEXT NOT NULL DEFAULT '#6c70df'")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'logo_content_type'")) await db.exec('ALTER TABLE schools ADD COLUMN logo_content_type TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'logo_file_name'")) await db.exec('ALTER TABLE schools ADD COLUMN logo_file_name TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'logo_data'")) await db.exec('ALTER TABLE schools ADD COLUMN logo_data BYTEA')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'deleted_at'")) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'courses' AND column_name = 'is_active'")) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'instructions'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
@@ -318,6 +332,14 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   } else {
+    const schoolColumns = await db.all('PRAGMA table_info(schools)')
+    if (!schoolColumns.some(column => column.name === 'contact_email')) await db.exec("ALTER TABLE schools ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''")
+    if (!schoolColumns.some(column => column.name === 'contact_phone')) await db.exec("ALTER TABLE schools ADD COLUMN contact_phone TEXT NOT NULL DEFAULT ''")
+    if (!schoolColumns.some(column => column.name === 'address')) await db.exec("ALTER TABLE schools ADD COLUMN address TEXT NOT NULL DEFAULT ''")
+    if (!schoolColumns.some(column => column.name === 'primary_color')) await db.exec("ALTER TABLE schools ADD COLUMN primary_color TEXT NOT NULL DEFAULT '#6c70df'")
+    if (!schoolColumns.some(column => column.name === 'logo_content_type')) await db.exec('ALTER TABLE schools ADD COLUMN logo_content_type TEXT')
+    if (!schoolColumns.some(column => column.name === 'logo_file_name')) await db.exec('ALTER TABLE schools ADD COLUMN logo_file_name TEXT')
+    if (!schoolColumns.some(column => column.name === 'logo_data')) await db.exec('ALTER TABLE schools ADD COLUMN logo_data BLOB')
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
     const courseColumns = await db.all('PRAGMA table_info(courses)')
@@ -344,6 +366,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 12)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 13)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 14)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 15)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

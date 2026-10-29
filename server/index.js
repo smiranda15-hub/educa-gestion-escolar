@@ -79,12 +79,13 @@ const hashToken = token => createHash('sha256').update(token).digest('hex')
 const getSession = async request => {
   const token = cookieToken(request)
   if (!token || token.length > 200) return null
-  return db.get(`SELECT u.id, u.school_id, u.email, u.full_name, u.role, s.name AS school_name, s.slug AS school_slug
+  return db.get(`SELECT u.id, u.school_id, u.email, u.full_name, u.role, s.name AS school_name, s.slug AS school_slug,
+      s.primary_color AS school_primary_color, s.logo_content_type AS school_logo_content_type
     FROM sessions x JOIN users u ON x.user_id = u.id JOIN schools s ON s.id = u.school_id
     WHERE x.token_hash = ? AND x.expires_at > ? AND u.is_active = 1 AND u.deleted_at IS NULL`, hashToken(token), Date.now())
 }
 const sessionCookie = (token, maxAge) => `educa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie}`
-const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug } })
+const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug, primaryColor: user.school_primary_color || '#6c70df', hasLogo: Boolean(user.school_logo_content_type) } })
 
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
@@ -130,7 +131,8 @@ async function route(request, response) {
     const body = await readBody(request)
     const slug = slugify(String(body.school || '').trim())
     const email = String(body.email || '').trim().toLowerCase()
-    const user = await db.get(`SELECT u.*, s.name AS school_name, s.slug AS school_slug FROM users u JOIN schools s ON s.id = u.school_id
+    const user = await db.get(`SELECT u.*, s.name AS school_name, s.slug AS school_slug,
+      s.primary_color AS school_primary_color, s.logo_content_type AS school_logo_content_type FROM users u JOIN schools s ON s.id = u.school_id
       WHERE s.slug = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
     const matched = await verifyPassword(String(body.password || ''), user?.password_hash || '00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000')
     if (!user || !matched) {
@@ -172,6 +174,47 @@ async function route(request, response) {
   }
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+
+  if (url.pathname === '/api/school/settings' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede configurar el colegio.' })
+    const settings = await db.get(`SELECT name, contact_email AS "contactEmail", contact_phone AS "contactPhone", address,
+      primary_color AS "primaryColor", logo_content_type AS "logoContentType" FROM schools WHERE id = ?`, user.school_id)
+    return json(response, 200, { settings: { ...settings, hasLogo: Boolean(settings.logoContentType) } })
+  }
+  if (url.pathname === '/api/school/settings' && method === 'PATCH') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede configurar el colegio.' })
+    const body = await readLargeJsonBody(request, 2 * 1024 * 1024)
+    const name = String(body.name || '').trim()
+    const contactEmail = String(body.contactEmail || '').trim().toLowerCase()
+    const contactPhone = String(body.contactPhone || '').trim()
+    const address = String(body.address || '').trim()
+    const primaryColor = String(body.primaryColor || '').trim()
+    if (name.length < 2 || name.length > 120 || (contactEmail && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail) || contactEmail.length > 254)) || contactPhone.length > 30 || !/^[\d+() .-]*$/.test(contactPhone) || address.length > 240 || !/^#[0-9a-f]{6}$/i.test(primaryColor)) return json(response, 400, { error: 'Revisa el nombre, correo, teléfono, dirección y color institucional.' })
+    let logo = null
+    if (body.logo) {
+      const image = body.logo
+      const fileName = basename(String(image.fileName || '').replaceAll('\\', '/')).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120)
+      const base64 = String(image.fileBase64 || '')
+      const fileData = Buffer.from(base64, 'base64')
+      const imageType = assessmentImageTypes.get(extname(fileName).toLowerCase())
+      if (!base64 || base64.length > 1_398_104 || fileData.length > 1024 * 1024 || fileData.toString('base64') !== base64 || !imageType || image.contentType !== imageType.mime || !imageType.magic(fileData)) return json(response, 415, { error: 'El logo debe ser JPG, PNG o WEBP y pesar máximo 1 MB.' })
+      logo = { fileName, fileData, contentType: imageType.mime }
+    }
+    await db.transaction(async tx => {
+      await tx.run('UPDATE schools SET name = ?, contact_email = ?, contact_phone = ?, address = ?, primary_color = ? WHERE id = ?', name, contactEmail, contactPhone, address, primaryColor.toLowerCase(), user.school_id)
+      if (body.removeLogo === true) await tx.run('UPDATE schools SET logo_content_type = NULL, logo_file_name = NULL, logo_data = NULL WHERE id = ?', user.school_id)
+      else if (logo) await tx.run('UPDATE schools SET logo_content_type = ?, logo_file_name = ?, logo_data = ? WHERE id = ?', logo.contentType, logo.fileName, logo.fileData, user.school_id)
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', user.school_id, user.id, 'school_branding_updated')
+    })
+    return json(response, 200, { settings: { name, contactEmail, contactPhone, address, primaryColor: primaryColor.toLowerCase(), hasLogo: Boolean(logo) || (body.removeLogo !== true && Boolean(user.school_logo_content_type)) } })
+  }
+  if (url.pathname === '/api/school/logo' && method === 'GET') {
+    const logo = await db.get('SELECT logo_content_type AS "contentType", logo_data AS "fileData" FROM schools WHERE id = ? AND logo_content_type IS NOT NULL', user.school_id)
+    if (!logo) return json(response, 404, { error: 'El colegio no tiene un logo configurado.' })
+    response.writeHead(200, { 'Content-Type': logo.contentType, 'Content-Length': String(logo.fileData.length), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; sandbox" })
+    response.end(logo.fileData)
+    return
+  }
 
   if (method === 'POST' && url.pathname === '/api/auth/password') {
     const body = await readBody(request)
