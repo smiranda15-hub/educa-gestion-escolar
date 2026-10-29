@@ -216,6 +216,25 @@ async function route(request, response) {
     return json(response, 200, { entries, total, limit, offset })
   }
 
+  if (url.pathname === '/api/audit-log/export' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede exportar la bitácora.' })
+    const action = String(url.searchParams.get('action') || '').trim().slice(0, 100).toLowerCase()
+    const from = String(url.searchParams.get('from') || '')
+    const to = String(url.searchParams.get('to') || '')
+    if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) return json(response, 400, { error: 'El rango de fechas no es válido.' })
+    const clauses = ['a.school_id = ?'], params = [user.school_id]
+    if (action) { clauses.push('LOWER(a.action) LIKE ?'); params.push(`%${action}%`) }
+    if (from) { clauses.push('a.created_at >= ?'); params.push(`${from} 00:00:00`) }
+    if (to) { const end = new Date(`${to}T00:00:00.000Z`); end.setUTCDate(end.getUTCDate() + 1); clauses.push('a.created_at < ?'); params.push(`${end.toISOString().slice(0, 10)} 00:00:00`) }
+    const rows = await db.all(`SELECT a.created_at AS "Fecha y hora", COALESCE(u.full_name, 'Cuenta eliminada') AS "Usuario", COALESCE(u.email, '') AS "Correo", a.action AS "Acción"
+      FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id AND u.school_id = a.school_id WHERE ${clauses.join(' AND ')} ORDER BY a.created_at DESC, a.id DESC LIMIT 20000`, ...params)
+    const csvCell = value => { let text = String(value ?? ''); if (/^[=+@\-\t\r]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"` }
+    const csv = ['Fecha y hora,Usuario,Correo,Acción', ...rows.map(row => Object.values(row).map(csvCell).join(','))].join('\r\n')
+    response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="educa-bitacora.csv"', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+    response.end(`\uFEFF${csv}`)
+    return
+  }
+
   if (url.pathname === '/api/school/settings' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede configurar el colegio.' })
     const settings = await db.get(`SELECT name, contact_email AS "contactEmail", contact_phone AS "contactPhone", address,
@@ -313,7 +332,317 @@ async function route(request, response) {
     return json(response, 200, { date, activeStudents, courses, pendingEnrollments, attendance, weeklyAttendance })
   }
 
-  if (url.pathname === '/api/communications/options' && method === 'GET') {
+  if (url.pathname === '/api/notifications' && method === 'GET') {
+    const rows = await db.all(`SELECT id, title, body, category, event_id AS "eventId", created_at AS "createdAt", read_at AS "readAt"
+      FROM user_notifications WHERE school_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50`, user.school_id, user.id)
+    return json(response, 200, { notifications: rows, unread: rows.filter(row => !row.readAt).length })
+  }
+  const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([0-9a-f-]{36})\/read$/i)
+  if (notificationReadMatch && method === 'PATCH') {
+    await db.run('UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ? AND user_id = ?', notificationReadMatch[1], user.school_id, user.id)
+    return json(response, 200, { read: true })
+  }
+  if (url.pathname === '/api/notifications/read-all' && method === 'POST') {
+    await db.run('UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP WHERE school_id = ? AND user_id = ? AND read_at IS NULL', user.school_id, user.id)
+    return json(response, 200, { read: true })
+  }
+
+  if (url.pathname === '/api/calendar/options' && method === 'GET') {
+    if (['estudiante', 'acudiente'].includes(user.role)) return json(response, 200, { courses: [] })
+    const courses = user.role === 'docente'
+      ? await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear" FROM courses c JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND c.is_active = 1 AND ct.user_id = ? GROUP BY c.id ORDER BY c.academic_year DESC, c.grade, c.name`, user.school_id, user.id)
+      : await db.all('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE school_id = ? AND is_active = 1 ORDER BY academic_year DESC, grade, name', user.school_id)
+    return json(response, 200, { courses })
+  }
+  if (url.pathname === '/api/calendar' && method === 'GET') {
+    const from = String(url.searchParams.get('from') || '')
+    const to = String(url.searchParams.get('to') || '')
+    if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) return json(response, 400, { error: 'El rango de fechas no es válido.' })
+    let sql = `SELECT e.id, e.title, e.details, e.event_date AS "eventDate", e.start_time AS "startTime", e.end_time AS "endTime",
+      e.event_type AS "eventType", e.course_id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear",
+      creator.full_name AS "createdByName", e.created_by AS "createdBy"
+      FROM school_events e LEFT JOIN courses c ON c.id = e.course_id JOIN users creator ON creator.id = e.created_by
+      WHERE e.school_id = ?`
+    const params = [user.school_id]
+    if (from) { sql += ' AND e.event_date >= ?'; params.push(from) }
+    if (to) { sql += ' AND e.event_date <= ?'; params.push(to) }
+    if (user.role === 'docente') { sql += ` AND (e.course_id IS NULL OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = e.course_id AND ct.user_id = ?))`; params.push(user.id) }
+    if (['estudiante', 'acudiente'].includes(user.role)) {
+      sql += ` AND (e.course_id IS NULL OR EXISTS (SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.user_id = ? AND st.school_id = e.school_id AND st.status = 'Activo' AND (
+          EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = e.school_id AND se.student_id = st.id AND se.course_id = e.course_id AND se.status = 'Activa')
+          OR (st.grade = c.grade AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = e.school_id AND se.student_id = st.id AND se.status = 'Activa')))))`
+      params.push(user.id)
+    }
+    sql += ' ORDER BY e.event_date, e.start_time, e.title LIMIT 500'
+    return json(response, 200, { events: await db.all(sql, ...params) })
+  }
+  if (url.pathname === '/api/calendar' && method === 'POST') {
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear eventos.' })
+    const body = await readBody(request)
+    const title = String(body.title || '').trim()
+    const details = String(body.details || '').trim()
+    const eventDate = String(body.eventDate || '')
+    const startTime = String(body.startTime || '')
+    const endTime = String(body.endTime || '')
+    const eventType = String(body.eventType || 'Evento')
+    const courseId = String(body.courseId || '')
+    if (title.length < 2 || title.length > 120 || details.length > 1500 || !validDate(eventDate) || (startTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)) || (endTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)) || (startTime && endTime && endTime <= startTime) || !['Evento', 'Reunión', 'Evaluación', 'Entrega', 'Festivo', 'Institucional'].includes(eventType)) return json(response, 400, { error: 'Revisa el título, fecha, horario y tipo del evento.' })
+    let course = null
+    if (courseId) {
+      course = await db.get('SELECT id, grade, academic_year AS "academicYear", name FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
+      if (!course) return json(response, 404, { error: 'No encontramos el curso activo.' })
+      if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
+    } else if (user.role === 'docente') return json(response, 403, { error: 'Los docentes deben asociar el evento a uno de sus cursos.' })
+    const id = randomUUID()
+    let recipients
+    if (course) {
+      const staff = await db.all('SELECT user_id AS id FROM course_teachers WHERE course_id = ?', course.id)
+      const families = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE st.school_id = ? AND st.status = 'Activo' AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
+        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`, user.school_id, course.id, course.academicYear, course.grade)
+      recipients = [...new Set([...staff, ...families].map(row => row.id).filter(id => id !== user.id))]
+    } else {
+      recipients = (await db.all('SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id <> ?', user.school_id, user.id)).map(row => row.id)
+    }
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO school_events (id, school_id, course_id, title, details, event_date, start_time, end_time, event_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course?.id || null, title, details, eventDate, startTime, endTime, eventType, user.id)
+      for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, event_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient, id, `Nuevo evento: ${title}`, `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ''}`, 'calendar')
+    })
+    await logAudit(user.school_id, user.id, 'calendar_event_created')
+    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length })
+  }
+  const calendarDeleteMatch = url.pathname.match(/^\/api\/calendar\/([0-9a-f-]{36})$/i)
+  if (calendarDeleteMatch && method === 'DELETE') {
+    const event = await db.get('SELECT id, created_by AS "createdBy" FROM school_events WHERE id = ? AND school_id = ?', calendarDeleteMatch[1], user.school_id)
+    if (!event) return json(response, 404, { error: 'No encontramos ese evento.' })
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria'].includes(user.role) && event.createdBy !== user.id) return json(response, 403, { error: 'Solo quien creó el evento o un administrador autorizado puede eliminarlo.' })
+    await db.run('DELETE FROM school_events WHERE id = ? AND school_id = ?', event.id, user.school_id)
+    await logAudit(user.school_id, user.id, 'calendar_event_deleted')
+    return json(response, 200, { deleted: true })
+  }
+
+  if (url.pathname === '/api/schedule/options' && method === 'GET') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede configurar el horario.' })
+    const assignments = await db.all(`SELECT c.id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear",
+      ct.user_id AS "teacherId", u.full_name AS "teacherName", ct.subject
+      FROM courses c JOIN course_teachers ct ON ct.course_id = c.id JOIN users u ON u.id = ct.user_id
+      WHERE c.school_id = ? AND c.is_active = 1 AND u.is_active = 1 AND u.deleted_at IS NULL ORDER BY c.grade, c.name, u.full_name, ct.subject`, user.school_id)
+    return json(response, 200, { assignments })
+  }
+  if (url.pathname === '/api/schedule' && method === 'GET') {
+    if (['docente'].includes(user.role)) {
+      const rows = await db.all(`SELECT s.id, s.weekday, s.start_time AS "startTime", s.end_time AS "endTime", s.room, s.subject,
+        c.id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear", u.full_name AS "teacherName"
+        FROM class_schedule_slots s JOIN courses c ON c.id = s.course_id JOIN users u ON u.id = s.teacher_id
+        WHERE s.school_id = ? AND s.teacher_id = ? ORDER BY s.weekday, s.start_time`, user.school_id, user.id)
+      return json(response, 200, { schedule: rows })
+    }
+    let sql = `SELECT s.id, s.weekday, s.start_time AS "startTime", s.end_time AS "endTime", s.room, s.subject,
+      c.id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear", u.full_name AS "teacherName"
+      FROM class_schedule_slots s JOIN courses c ON c.id = s.course_id JOIN users u ON u.id = s.teacher_id WHERE s.school_id = ?`
+    const params = [user.school_id]
+    if (['estudiante', 'acudiente'].includes(user.role)) { sql += ' AND EXISTS (SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND st.school_id = s.school_id AND st.grade = c.grade AND st.status = \'Activo\')'; params.push(user.id) }
+    sql += ' ORDER BY c.academic_year DESC, s.weekday, s.start_time, c.grade'
+    return json(response, 200, { schedule: await db.all(sql, ...params) })
+  }
+  if (url.pathname === '/api/schedule' && method === 'POST') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
+    const body = await readBody(request)
+    const courseId = String(body.courseId || ''), teacherId = String(body.teacherId || ''), subject = String(body.subject || '').trim()
+    const weekday = Number(body.weekday), startTime = String(body.startTime || ''), endTime = String(body.endTime || ''), room = String(body.room || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(courseId) || !/^[0-9a-f-]{36}$/i.test(teacherId) || subject.length < 2 || subject.length > 80 || !Number.isInteger(weekday) || weekday < 1 || weekday > 5 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime) || endTime <= startTime || room.length > 80) return json(response, 400, { error: 'Revisa curso, docente, día, horas y salón.' })
+    const assignment = await db.get(`SELECT c.id FROM courses c JOIN course_teachers ct ON ct.course_id = c.id
+      WHERE c.id = ? AND c.school_id = ? AND c.is_active = 1 AND ct.user_id = ? AND ct.subject = ?`, courseId, user.school_id, teacherId, subject)
+    if (!assignment) return json(response, 400, { error: 'El docente debe tener asignada esa asignatura en el curso.' })
+    const conflict = await db.get(`SELECT s.id FROM class_schedule_slots s WHERE s.school_id = ? AND s.weekday = ?
+      AND s.start_time < ? AND s.end_time > ? AND (s.teacher_id = ? OR s.course_id = ?)`, user.school_id, weekday, endTime, startTime, teacherId, courseId)
+    if (conflict) return json(response, 409, { error: 'El horario se cruza con otra clase del docente o del curso.' })
+    const id = randomUUID()
+    await db.run('INSERT INTO class_schedule_slots (id, school_id, course_id, teacher_id, subject, weekday, start_time, end_time, room, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, courseId, teacherId, subject, weekday, startTime, endTime, room, user.id)
+    await logAudit(user.school_id, user.id, 'schedule_slot_created')
+    return json(response, 201, { id })
+  }
+  const scheduleDeleteMatch = url.pathname.match(/^\/api\/schedule\/([0-9a-f-]{36})$/i)
+  if (scheduleDeleteMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
+    await db.run('DELETE FROM class_schedule_slots WHERE id = ? AND school_id = ?', scheduleDeleteMatch[1], user.school_id)
+    await logAudit(user.school_id, user.id, 'schedule_slot_deleted')
+    return json(response, 200, { deleted: true })
+  }
+
+  if (url.pathname === '/api/academic-periods' && method === 'GET') {
+    return json(response, 200, { periods: await db.all('SELECT id, academic_year AS "academicYear", name, start_date AS "startDate", end_date AS "endDate", is_active AS "active" FROM academic_periods WHERE school_id = ? ORDER BY academic_year DESC, start_date', user.school_id) })
+  }
+  if (url.pathname === '/api/academic-periods' && method === 'POST') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
+    const body = await readBody(request)
+    const year = String(body.academicYear || ''), name = String(body.name || '').trim(), startDate = String(body.startDate || ''), endDate = String(body.endDate || '')
+    if (!/^\d{4}-\d{4}$/.test(year) || name.length < 2 || name.length > 40 || !validDate(startDate) || !validDate(endDate) || endDate < startDate) return json(response, 400, { error: 'Revisa el año lectivo, nombre y fechas del periodo.' })
+    const id = randomUUID()
+    try { await db.run('INSERT INTO academic_periods (id, school_id, academic_year, name, start_date, end_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)', id, user.school_id, year, name, startDate, endDate, user.id) }
+    catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe ese periodo para el año lectivo.' }); throw error }
+    await logAudit(user.school_id, user.id, 'academic_period_created')
+    return json(response, 201, { id })
+  }
+  const periodMatch = url.pathname.match(/^\/api\/academic-periods\/([0-9a-f-]{36})$/i)
+  if (periodMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
+    await db.run('DELETE FROM academic_periods WHERE id = ? AND school_id = ?', periodMatch[1], user.school_id)
+    await logAudit(user.school_id, user.id, 'academic_period_deleted')
+    return json(response, 200, { deleted: true })
+  }
+
+  if (url.pathname === '/api/attendance/justifications' && method === 'GET') {
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes acceso a justificaciones.' })
+    let sql = `SELECT j.id, j.student_id AS "studentId", st.full_name AS "studentName", st.grade, j.attendance_date AS "attendanceDate",
+      j.reason, j.status, j.reviewer_note AS "reviewerNote", j.support_file_name AS "supportFileName", j.created_at AS "createdAt", j.reviewed_at AS "reviewedAt"
+      FROM attendance_justifications j JOIN students st ON st.id = j.student_id WHERE j.school_id = ?`
+    const params = [user.school_id]
+    if (['acudiente', 'estudiante'].includes(user.role)) { sql += ' AND EXISTS (SELECT 1 FROM user_students us WHERE us.user_id = ? AND us.student_id = st.id)'; params.push(user.id) }
+    if (user.role === 'docente') { sql += ` AND EXISTS (SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND c.school_id = st.school_id AND c.grade = st.grade)`; params.push(user.id) }
+    sql += ' ORDER BY j.attendance_date DESC, st.full_name LIMIT 500'
+    return json(response, 200, { justifications: await db.all(sql, ...params) })
+  }
+  if (url.pathname === '/api/attendance/justifications' && method === 'POST') {
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Solo estudiantes y acudientes pueden enviar justificaciones.' })
+    const body = await readLargeJsonBody(request, 4 * 1024 * 1024), studentId = String(body.studentId || ''), date = String(body.date || ''), reason = String(body.reason || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !validDate(date) || date > new Date().toISOString().slice(0, 10) || reason.length < 10 || reason.length > 1000) return json(response, 400, { error: 'Revisa estudiante, fecha y motivo (mínimo 10 caracteres).' })
+    const linked = await db.get("SELECT st.id, st.full_name AS name FROM students st JOIN user_students us ON us.student_id = st.id WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo' AND us.user_id = ?", studentId, user.school_id, user.id)
+    if (!linked) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
+    let supportFile = null
+    if (body.supportFileBase64) {
+      const fileName = basename(String(body.supportFileName || '')).slice(0, 160), type = workFileTypes.get(extname(fileName).toLowerCase())
+      if (!type || !['.pdf', '.png', '.jpg', '.jpeg'].includes(extname(fileName).toLowerCase())) return json(response, 400, { error: 'El soporte debe ser PDF, PNG o JPG.' })
+      const encoded = String(body.supportFileBase64)
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) return json(response, 400, { error: 'El archivo adjunto no tiene un formato válido.' })
+      const data = Buffer.from(encoded, 'base64')
+      if (!data.length || data.length > 2 * 1024 * 1024 || !type.magic(data)) return json(response, 400, { error: 'El soporte supera 2 MB o su contenido no coincide con el formato declarado.' })
+      supportFile = { fileName, mime: type.mime, data }
+    }
+    const id = randomUUID()
+    try { await db.run(`INSERT INTO attendance_justifications (id, school_id, student_id, attendance_date, reason, created_by,
+      support_file_name, support_content_type, support_file_size, support_file_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, user.school_id, studentId, date, reason, user.id, supportFile?.fileName || null, supportFile?.mime || null, supportFile?.data.length || 0, supportFile?.data || null) }
+    catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya hay una justificación registrada para ese estudiante y fecha.' }); throw error }
+    const reviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','coordinacion','secretaria')", user.school_id)
+    for (const reviewer of reviewers) await db.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, reviewer.id, 'Nueva justificación de ausencia', `${linked.name} · ${date}`, 'attendance')
+    await logAudit(user.school_id, user.id, 'attendance_justification_created')
+    return json(response, 201, { id })
+  }
+  const justificationFileMatch = url.pathname.match(/^\/api\/attendance\/justifications\/([0-9a-f-]{36})\/file$/i)
+  if (justificationFileMatch && method === 'GET') {
+    const file = await db.get(`SELECT j.student_id AS "studentId", j.support_file_name AS "fileName", j.support_content_type AS "contentType",
+      j.support_file_size AS "fileSize", j.support_file_data AS "fileData" FROM attendance_justifications j
+      WHERE j.id = ? AND j.school_id = ? AND j.support_file_name IS NOT NULL`, justificationFileMatch[1], user.school_id)
+    if (!file) return json(response, 404, { error: 'No encontramos el archivo de soporte.' })
+    const staff = ['admin', 'rectoria', 'coordinacion', 'secretaria'].includes(user.role)
+    const linked = ['acudiente', 'estudiante'].includes(user.role) && await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, file.studentId)
+    if (!staff && !linked) return json(response, 403, { error: 'No tienes permiso para consultar este soporte.' })
+    const safeName = encodeURIComponent(file.fileName).replaceAll("'", '%27')
+    response.writeHead(200, { 'Content-Type': file.contentType, 'Content-Length': String(file.fileSize), 'Content-Disposition': `attachment; filename*=UTF-8''${safeName}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+    response.end(file.fileData)
+    return
+  }
+  const justificationMatch = url.pathname.match(/^\/api\/attendance\/justifications\/([0-9a-f-]{36})$/i)
+  if (justificationMatch && method === 'PATCH') {
+    if (!['admin', 'rectoria', 'coordinacion', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo coordinación y administración pueden revisar justificaciones.' })
+    const body = await readBody(request), status = String(body.status || ''), note = String(body.note || '').trim()
+    if (!['Aprobada', 'Rechazada'].includes(status) || note.length > 500 || (status === 'Rechazada' && note.length < 3)) return json(response, 400, { error: 'Selecciona aprobación o rechazo; el rechazo requiere una nota de 3 a 500 caracteres.' })
+    const item = await db.get('SELECT id, student_id AS "studentId", attendance_date AS date, created_by AS "createdBy" FROM attendance_justifications WHERE id = ? AND school_id = ?', justificationMatch[1], user.school_id)
+    if (!item) return json(response, 404, { error: 'No encontramos esa justificación.' })
+    await db.transaction(async tx => {
+      await tx.run('UPDATE attendance_justifications SET status = ?, reviewer_note = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', status, note, user.id, item.id, user.school_id)
+      if (status === 'Aprobada') await tx.run("UPDATE attendance_records SET status = 'Justificado', marked_by = ?, marked_at = CURRENT_TIMESTAMP WHERE school_id = ? AND student_id = ? AND attendance_date = ? AND status = 'Ausente'", user.id, user.school_id, item.studentId, item.date)
+      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, item.createdBy, `Justificación ${status.toLocaleLowerCase('es')}`, `${item.date}${note ? ` · ${note}` : ''}`, 'attendance')
+    })
+    await logAudit(user.school_id, user.id, 'attendance_justification_reviewed')
+    return json(response, 200, { updated: true })
+  }
+
+  if (url.pathname === '/api/observations/options' && method === 'GET') {
+    if (!['admin', 'rectoria', 'coordinacion', 'orientacion', 'docente'].includes(user.role)) return json(response, 403, { error: 'El observador contiene información restringida.' })
+    const students = user.role === 'docente'
+      ? await db.all(`SELECT DISTINCT st.id, st.full_name AS name, st.grade FROM students st JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade
+          JOIN course_teachers ct ON ct.course_id = c.id WHERE st.school_id = ? AND st.status = 'Activo' AND ct.user_id = ? ORDER BY st.grade, st.full_name`, user.school_id, user.id)
+      : await db.all("SELECT id, full_name AS name, grade FROM students WHERE school_id = ? AND status = 'Activo' ORDER BY grade, full_name", user.school_id)
+    return json(response, 200, { students })
+  }
+  if (url.pathname === '/api/observations' && method === 'GET') {
+    if (!['admin', 'rectoria', 'coordinacion', 'orientacion', 'docente'].includes(user.role)) return json(response, 403, { error: 'El observador contiene información restringida.' })
+    let sql = `SELECT o.id, o.student_id AS "studentId", st.full_name AS "studentName", st.grade, o.category, o.severity, o.details,
+      o.confidential, o.created_at AS "createdAt", creator.full_name AS "createdByName"
+      FROM student_observations o JOIN students st ON st.id = o.student_id JOIN users creator ON creator.id = o.created_by WHERE o.school_id = ?`
+    const params = [user.school_id]
+    if (user.role === 'docente') { sql += ` AND o.confidential = 0 AND EXISTS (SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND c.school_id = st.school_id AND c.grade = st.grade)`; params.push(user.id) }
+    sql += ' ORDER BY o.created_at DESC LIMIT 500'
+    return json(response, 200, { observations: await db.all(sql, ...params) })
+  }
+  if (url.pathname === '/api/observations' && method === 'POST') {
+    if (!['admin', 'rectoria', 'coordinacion', 'orientacion', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar observaciones.' })
+    const body = await readBody(request), studentId = String(body.studentId || ''), category = String(body.category || '').trim(), severity = String(body.severity || 'Seguimiento'), details = String(body.details || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || category.length < 2 || category.length > 60 || !['Positiva', 'Seguimiento', 'Prioritaria'].includes(severity) || details.length < 10 || details.length > 2000) return json(response, 400, { error: 'Revisa estudiante, categoría, prioridad y detalle (mínimo 10 caracteres).' })
+    const student = await db.get("SELECT id, grade FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)
+    if (!student) return json(response, 404, { error: 'No encontramos un estudiante activo de este colegio.' })
+    if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND ct.subject IS NOT NULL AND c.school_id = ? AND c.grade = ?', user.id, user.school_id, student.grade)) return json(response, 403, { error: 'Solo puedes registrar observaciones para los grados que tienes asignados.' })
+    const confidential = user.role === 'docente' ? 1 : body.confidential === false ? 0 : 1
+    const id = randomUUID()
+    await db.run('INSERT INTO student_observations (id, school_id, student_id, category, severity, details, confidential, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, studentId, category, severity, details, confidential, user.id)
+    await logAudit(user.school_id, user.id, 'student_observation_created')
+    return json(response, 201, { id })
+  }
+  const observationMatch = url.pathname.match(/^\/api\/observations\/([0-9a-f-]{36})$/i)
+  if (observationMatch && method === 'DELETE') {
+    if (!['admin', 'orientacion'].includes(user.role)) return json(response, 403, { error: 'Solo administración u orientación pueden eliminar observaciones.' })
+    await db.run('DELETE FROM student_observations WHERE id = ? AND school_id = ?', observationMatch[1], user.school_id)
+    await logAudit(user.school_id, user.id, 'student_observation_deleted')
+    return json(response, 200, { deleted: true })
+  }
+
+  if (url.pathname === '/api/admin/backup' && method === 'GET') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede descargar el respaldo del colegio.' })
+    const [school, users, students, courses, assignments, enrollments, attendance, assessments, grades, requests, events, schedule, observations, periods, justifications, communications, audit] = await Promise.all([
+      db.get('SELECT id, slug, name, contact_email AS "contactEmail", contact_phone AS "contactPhone", address, primary_color AS "primaryColor" FROM schools WHERE id = ?', user.school_id),
+      db.all('SELECT id, email, full_name AS name, role, is_active AS active FROM users WHERE school_id = ? AND deleted_at IS NULL', user.school_id),
+      db.all('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status FROM students WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, name, grade, academic_year AS "academicYear", is_active AS active FROM courses WHERE school_id = ?', user.school_id),
+      db.all('SELECT ct.course_id AS "courseId", ct.user_id AS "teacherId", ct.subject FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE c.school_id = ?', user.school_id),
+      db.all('SELECT id, student_id AS "studentId", course_id AS "courseId", academic_year AS "academicYear", status, start_date AS "startDate", end_date AS "endDate" FROM student_enrollments WHERE school_id = ?', user.school_id),
+      db.all('SELECT course_id AS "courseId", student_id AS "studentId", attendance_date AS date, status, marked_by AS "markedBy", marked_at AS "markedAt" FROM attendance_records WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, course_id AS "courseId", subject, period, title, due_at AS "dueAt", max_score AS "maxScore", delivery_mode AS "deliveryMode" FROM grade_assessments WHERE school_id = ?', user.school_id),
+      db.all('SELECT sg.assessment_id AS "assessmentId", sg.student_id AS "studentId", sg.score, sg.comment FROM student_grades sg JOIN grade_assessments a ON a.id = sg.assessment_id WHERE a.school_id = ?', user.school_id),
+      db.all('SELECT id, student_name AS "studentName", document, grade_requested AS "gradeRequested", academic_year AS "academicYear", status, pending_documents AS "pendingDocuments" FROM enrollment_requests WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, course_id AS "courseId", title, details, event_date AS "eventDate", start_time AS "startTime", end_time AS "endTime", event_type AS "eventType" FROM school_events WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, course_id AS "courseId", teacher_id AS "teacherId", subject, weekday, start_time AS "startTime", end_time AS "endTime", room FROM class_schedule_slots WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, student_id AS "studentId", category, severity, details, confidential, created_at AS "createdAt" FROM student_observations WHERE school_id = ?', user.school_id),
+      db.all('SELECT academic_year AS "academicYear", name, start_date AS "startDate", end_date AS "endDate", is_active AS active FROM academic_periods WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, student_id AS "studentId", attendance_date AS "attendanceDate", reason, status, reviewer_note AS "reviewerNote", support_file_name AS "supportFileName", created_at AS "createdAt" FROM attendance_justifications WHERE school_id = ?', user.school_id),
+      db.all('SELECT id, course_id AS "courseId", audience, title, body, created_by AS "createdBy", created_at AS "createdAt" FROM communications WHERE school_id = ?', user.school_id),
+      db.all('SELECT actor_user_id AS "actorUserId", action, created_at AS "createdAt" FROM audit_log WHERE school_id = ? ORDER BY id', user.school_id),
+    ])
+    const date = new Date().toISOString()
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="educa-respaldo-${school.slug}-${date.slice(0, 10)}.json"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+    response.end(JSON.stringify({ format: 'educa-school-backup-v1', generatedAt: date, school, users, students, courses, assignments, enrollments, attendance, assessments, grades, enrollmentRequests: requests, events, schedule, observations, periods, justifications, communications, audit }, null, 2))
+    await logAudit(user.school_id, user.id, 'school_backup_downloaded')
+    return
+  }
+
+  if (url.pathname === '/api/students/import' && method === 'POST') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden importar estudiantes.' })
+    const body = await readBody(request), rows = body.records
+    if (!Array.isArray(rows) || !rows.length || rows.length > 1000) return json(response, 400, { error: 'El archivo debe contener entre 1 y 1.000 estudiantes.' })
+    const clean = rows.map((row, index) => ({ rowNo: index + 2, name: String(row.name || '').trim(), document: String(row.document || '').trim(), grade: String(row.grade || '').trim(), guardian: String(row.guardian || '').trim(), phone: String(row.phone || '').trim(), status: row.status === 'Retirado' ? 'Retirado' : 'Activo' }))
+    if (clean.some(row => row.name.length < 2 || row.name.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(row.document) || row.grade.length < 2 || row.grade.length > 40 || row.guardian.length > 100 || row.phone.length > 25) || new Set(clean.map(row => row.document)).size !== clean.length) return json(response, 400, { error: 'Hay filas inválidas o documentos repetidos. Columnas requeridas: name, document, grade, guardian, phone, status.' })
+    const existing = await db.all(`SELECT document FROM students WHERE school_id = ? AND document IN (${clean.map(() => '?').join(',')})`, user.school_id, ...clean.map(row => row.document))
+    if (existing.length) return json(response, 409, { error: `El documento ${existing[0].document} ya está registrado. No se importó ninguna fila.` })
+    await db.transaction(async tx => {
+      for (const row of clean) await tx.run('INSERT INTO students (id, school_id, full_name, document, grade, guardian_name, guardian_phone, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, row.name, row.document, row.grade, row.guardian, row.phone, row.status)
+    })
+    await logAudit(user.school_id, user.id, `students_imported:${clean.length}`)
+    return json(response, 201, { imported: clean.length })
+  }
+
+if (url.pathname === '/api/communications/options' && method === 'GET') {
     const allowed = ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion']
     if (!allowed.includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar destinatarios.' })
     const courses = user.role === 'docente'
@@ -370,7 +699,10 @@ async function route(request, response) {
     const id = randomUUID()
     await db.transaction(async tx => {
       await tx.run('INSERT INTO communications (id, school_id, course_id, audience, title, body, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)', id, user.school_id, audience === 'course' ? course.id : null, audience, title, content, user.id)
-      for (const recipient of recipientUsers) await tx.run('INSERT INTO communication_recipients (communication_id, user_id) VALUES (?, ?)', id, recipient.id)
+      for (const recipient of recipientUsers) {
+        await tx.run('INSERT INTO communication_recipients (communication_id, user_id) VALUES (?, ?)', id, recipient.id)
+        await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, `Nuevo comunicado: ${title}`, content.slice(0, 220), 'communication')
+      }
     })
     await logAudit(user.school_id, user.id, `communication_created:${audience}`)
     return json(response, 201, { created: true, id, recipientCount: recipientUsers.length })

@@ -314,6 +314,90 @@ export async function migrate() {
       PRIMARY KEY (communication_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS communication_recipients_user_idx ON communication_recipients(user_id, read_at);
+    CREATE TABLE IF NOT EXISTS school_events (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      event_date TEXT NOT NULL,
+      start_time TEXT NOT NULL DEFAULT '',
+      end_time TEXT NOT NULL DEFAULT '',
+      event_type TEXT NOT NULL DEFAULT 'Evento',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS school_events_school_date_idx ON school_events(school_id, event_date);
+    CREATE TABLE IF NOT EXISTS user_notifications (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES school_events(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'general',
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      read_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS user_notifications_unread_idx ON user_notifications(school_id, user_id, read_at, created_at);
+    CREATE TABLE IF NOT EXISTS attendance_justifications (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      attendance_date TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Pendiente' CHECK (status IN ('Pendiente','Aprobada','Rechazada')),
+      reviewer_note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      reviewed_by TEXT REFERENCES users(id),
+      support_file_name TEXT,
+      support_content_type TEXT,
+      support_file_size INTEGER NOT NULL DEFAULT 0,
+      support_file_data ${usePostgres ? 'BYTEA' : 'BLOB'},
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      reviewed_at TEXT,
+      UNIQUE (school_id, student_id, attendance_date)
+    );
+    CREATE INDEX IF NOT EXISTS attendance_justifications_school_date_idx ON attendance_justifications(school_id, attendance_date, status);
+    CREATE TABLE IF NOT EXISTS class_schedule_slots (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      course_id TEXT NOT NULL REFERENCES courses(id),
+      teacher_id TEXT NOT NULL REFERENCES users(id),
+      subject TEXT NOT NULL,
+      weekday INTEGER NOT NULL CHECK (weekday BETWEEN 1 AND 7),
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      room TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS class_schedule_school_day_idx ON class_schedule_slots(school_id, weekday, start_time);
+    CREATE TABLE IF NOT EXISTS student_observations (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      category TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'Seguimiento' CHECK (severity IN ('Positiva','Seguimiento','Prioritaria')),
+      details TEXT NOT NULL,
+      confidential INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS student_observations_student_idx ON student_observations(school_id, student_id, created_at);
+    CREATE TABLE IF NOT EXISTS academic_periods (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      academic_year TEXT NOT NULL,
+      name TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (school_id, academic_year, name)
+    );
+    CREATE INDEX IF NOT EXISTS academic_periods_school_year_idx ON academic_periods(school_id, academic_year, is_active);
   `)
   if (usePostgres) {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = 'contact_email'")) await db.exec("ALTER TABLE schools ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''")
@@ -367,6 +451,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 13)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 14)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 15)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 16)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
