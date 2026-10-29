@@ -45,7 +45,11 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - El administrador crea cuentas desde **Usuarios y accesos**, define el rol y una contraseña inicial; también puede activar o desactivar cuentas.
 - Para crear un acudiente, primero registra al estudiante y luego asocia uno o más estudiantes activos. Para una cuenta de estudiante, asocia exactamente un registro.
 - Acudientes y estudiantes solo reciben los nombres, grados y estados de los registros que tienen asociados. La lista general de estudiantes está limitada a administración y secretaría.
-- Docentes y los demás roles pueden iniciar sesión, pero sus cursos y módulos todavía deben implementarse y asignarse antes de mostrarles información escolar.
+- Los docentes ven las funciones de sus cursos asignados; otros roles se limitan a los módulos habilitados para su perfil.
+- Docentes pueden crear evaluaciones y trabajos con instrucciones, fecha límite y puntaje máximo, registrar notas y consultar las entregas de sus cursos asignados.
+- Estudiantes y acudientes vinculados consultan trabajos del año lectivo activo y pueden subir hasta 10 versiones por actividad; se admiten PDF, JPG, PNG, DOCX y XLSX de hasta 8 MB. El contenido se almacena en la base de datos, no en archivos temporales del servidor.
+- Boletines por estudiante y periodo muestran evaluaciones, notas, observaciones y promedio porcentual normalizado. El PDF se genera desde la opción Imprimir del navegador; no se aplican ponderaciones institucionales hasta que el colegio configure su escala.
+- Las entregas y los boletines se limitan en el backend al colegio, al estudiante vinculado y a las asignaturas de cada docente.
 - La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña no está disponible todavía.
 
 ## Construcción

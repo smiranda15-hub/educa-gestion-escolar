@@ -760,6 +760,151 @@ async function route(request, response) {
     return json(response, 200, { saved: records.length })
   }
 
+  if (url.pathname === '/api/grades/report-card/options' && method === 'GET') {
+    const permitted = ['admin', 'secretaria', 'docente', 'acudiente', 'estudiante']
+    if (!permitted.includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
+    let students
+    if (['acudiente', 'estudiante'].includes(user.role)) {
+      students = await db.all(`SELECT st.id, st.full_name AS name, st.grade FROM user_students us
+        JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
+    } else if (user.role === 'docente') {
+      students = await db.all(`SELECT DISTINCT st.id, st.full_name AS name, st.grade FROM students st
+        JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade
+        JOIN course_teachers ct ON ct.course_id = c.id AND ct.user_id = ?
+        WHERE st.school_id = ? ORDER BY st.grade, st.full_name`, user.id, user.school_id)
+    } else {
+      students = await db.all('SELECT id, full_name AS name, grade FROM students WHERE school_id = ? ORDER BY grade, full_name', user.school_id)
+    }
+    let years
+    if (user.role === 'docente') years = await db.all(`SELECT DISTINCT c.academic_year AS year FROM courses c JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND ct.user_id = ? ORDER BY c.academic_year DESC`, user.school_id, user.id)
+    else years = await db.all('SELECT DISTINCT academic_year AS year FROM courses WHERE school_id = ? ORDER BY academic_year DESC', user.school_id)
+    return json(response, 200, { students, years: years.map(item => item.year), periods: ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4'] })
+  }
+  if (url.pathname === '/api/grades/report-card' && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
+    const studentId = String(url.searchParams.get('studentId') || '')
+    const academicYear = String(url.searchParams.get('academicYear') || '')
+    const period = String(url.searchParams.get('period') || '')
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !/^\d{4}-\d{4}$/.test(academicYear) || !/^Periodo [1-4]$/.test(period)) return json(response, 400, { error: 'Selecciona estudiante, año lectivo y periodo válidos.' })
+    const student = await db.get('SELECT id, full_name AS name, grade, status FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
+    if (!student) return json(response, 404, { error: 'No encontramos al estudiante en este colegio.' })
+    if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, student.id)) return json(response, 403, { error: 'Solo puedes consultar los boletines de estudiantes vinculados a tu cuenta.' })
+    if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ?', user.id, user.school_id, student.grade, academicYear)) return json(response, 403, { error: 'No tienes una asignatura asignada a ese estudiante para el año lectivo seleccionado.' })
+    const marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
+        a.due_at AS "dueAt", sg.score, sg.comment, sg.updated_at AS "updatedAt",
+        (SELECT u.full_name FROM course_teachers ct JOIN users u ON u.id = ct.user_id
+          WHERE ct.course_id = c.id AND ct.subject = a.subject ORDER BY u.full_name LIMIT 1) AS "teacherName"
+      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      LEFT JOIN student_grades sg ON sg.assessment_id = a.id AND sg.student_id = ?
+      WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ? AND a.period = ?
+        AND (? <> 'docente' OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?))
+      ORDER BY a.subject, a.created_at, a.title`, student.id, user.school_id, user.school_id, student.grade, academicYear, period, user.role, user.id)
+    const bySubject = new Map()
+    for (const mark of marks) {
+      const score = mark.score === null ? null : Number(mark.score)
+      const maxScore = Number(mark.maxScore)
+      if (!bySubject.has(mark.subject)) bySubject.set(mark.subject, { subject: mark.subject, teacherName: mark.teacherName || '', assessments: [], scorePercentages: [] })
+      const summary = bySubject.get(mark.subject)
+      summary.assessments.push({ title: mark.title, score, maxScore, comment: mark.comment || '', updatedAt: mark.updatedAt, instructions: mark.instructions || '', dueAt: mark.dueAt })
+      if (score !== null && maxScore > 0) summary.scorePercentages.push(score / maxScore * 100)
+    }
+    const subjects = [...bySubject.values()].map(summary => ({
+      subject: summary.subject,
+      teacherName: summary.teacherName,
+      averagePercent: summary.scorePercentages.length ? Math.round(summary.scorePercentages.reduce((sum, value) => sum + value, 0) / summary.scorePercentages.length * 100) / 100 : null,
+      gradedCount: summary.scorePercentages.length,
+      assessmentCount: summary.assessments.length,
+      assessments: summary.assessments,
+    }))
+    await logAudit(user.school_id, user.id, 'report_card_viewed')
+    return json(response, 200, { student, academicYear, period, subjects, generatedAt: new Date().toISOString() })
+  }
+  if (url.pathname === '/api/portal/assignments' && method === 'GET') {
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
+    const studentId = String(url.searchParams.get('studentId') || '')
+    const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
+    if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
+    const assignments = await db.all(`SELECT a.id, a.title, a.instructions, a.due_at AS "dueAt", a.subject, a.period,
+        a.max_score AS "maxScore", c.name AS "courseName", c.academic_year AS "academicYear",
+        sg.score, sg.comment, latest.id AS "submissionId", latest.original_file_name AS "fileName",
+        latest.uploaded_at AS "uploadedAt", latest.submission_no AS "submissionNo"
+      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      LEFT JOIN student_grades sg ON sg.assessment_id = a.id AND sg.student_id = ?
+      LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
+        WHERE ws.assessment_id = a.id AND ws.student_id = ? ORDER BY ws.submission_no DESC LIMIT 1)
+      WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
+        AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
+          WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)
+      ORDER BY a.due_at, a.subject, a.title`, student.id, student.id, user.school_id, user.school_id, student.grade)
+    return json(response, 200, { assignments: assignments.map(item => ({ ...item, score: item.score === null ? null : Number(item.score), maxScore: Number(item.maxScore) })) })
+  }
+  const studentSubmissionMatch = url.pathname.match(/^\/api\/portal\/assignments\/([0-9a-f-]{36})\/submissions$/i)
+  if (studentSubmissionMatch && method === 'POST') {
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Solo estudiantes y acudientes vinculados pueden entregar trabajos.' })
+    const body = await readLargeJsonBody(request)
+    const studentId = String(body.studentId || '')
+    const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
+    if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
+    const assessment = await db.get(`SELECT a.id, c.grade FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
+        AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
+          WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)`, studentSubmissionMatch[1], user.school_id, user.school_id, student.grade)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa tarea activa para el grado de este estudiante.' })
+    const base64 = String(body.fileBase64 || '')
+    if (!base64 || base64.length > 11_184_812 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) return json(response, 400, { error: 'El archivo está vacío o no es válido.' })
+    const fileData = Buffer.from(base64, 'base64')
+    if (!fileData.length || fileData.length > 8 * 1024 * 1024 || fileData.toString('base64') !== base64) return json(response, 413, { error: 'El trabajo debe ocupar máximo 8 MB.' })
+    const originalFileName = basename(String(body.fileName || '').replaceAll('\\', '/')).replace(/[\u0000-\u001f\u007f]/g, '').replace(/[^\p{L}\p{N}._ ()-]/gu, '').slice(0, 140)
+    const extension = extname(originalFileName).toLowerCase()
+    const fileType = workFileTypes.get(extension)
+    if (!fileType || body.contentType !== fileType.mime || !fileType.magic(fileData)) return json(response, 415, { error: 'Formato no permitido o el contenido no coincide. Usa PDF, JPG, PNG, DOCX o XLSX.' })
+    const attempt = Number((await db.get('SELECT COALESCE(MAX(submission_no), 0) AS last FROM work_submissions WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)).last) + 1
+    if (attempt > 10) return json(response, 409, { error: 'Se alcanzó el máximo de 10 entregas para esta tarea. Contacta al docente.' })
+    const submissionId = randomUUID()
+    try {
+      await db.run(`INSERT INTO work_submissions (id, school_id, assessment_id, student_id, uploaded_by, submission_no,
+        original_file_name, content_type, file_size, file_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        submissionId, user.school_id, assessment.id, student.id, user.id, attempt, originalFileName, fileType.mime, fileData.length, fileData)
+    } catch (error) {
+      if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'La entrega cambió al mismo tiempo. Actualiza la página e inténtalo de nuevo.' })
+      throw error
+    }
+    await logAudit(user.school_id, user.id, 'work_submitted')
+    return json(response, 201, { submissionId, submissionNo: attempt, uploadedAt: new Date().toISOString() })
+  }
+  const assessmentSubmissionsMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/submissions$/i)
+  if (assessmentSubmissionsMatch && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar entregas.' })
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, c.grade FROM grade_assessments a
+      JOIN courses c ON c.id = a.course_id WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, assessmentSubmissionsMatch[1], user.school_id, user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
+    if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND user_id = ?', assessment.courseId, assessment.subject, user.id)) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
+    const submissions = await db.all(`SELECT st.id AS "studentId", st.full_name AS "studentName", st.grade,
+        latest.id AS "submissionId", latest.original_file_name AS "fileName", latest.uploaded_at AS "uploadedAt",
+        latest.submission_no AS "submissionNo",
+        (SELECT COUNT(*) FROM work_submissions ws WHERE ws.assessment_id = ? AND ws.student_id = st.id) AS attempts
+      FROM students st LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
+        WHERE ws.assessment_id = ? AND ws.student_id = st.id ORDER BY ws.submission_no DESC LIMIT 1)
+      WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo' ORDER BY st.full_name`, assessment.id, assessment.id, user.school_id, assessment.grade)
+    return json(response, 200, { submissions: submissions.map(row => ({ ...row, attempts: Number(row.attempts) })) })
+  }
+  const submissionFileMatch = url.pathname.match(/^\/api\/grades\/submissions\/([0-9a-f-]{36})\/file$/i)
+  if (submissionFileMatch && method === 'GET') {
+    const submission = await db.get(`SELECT ws.id, ws.student_id AS "studentId", ws.original_file_name AS "fileName",
+        ws.content_type AS "contentType", ws.file_size AS "fileSize", ws.file_data AS "fileData",
+        a.course_id AS "courseId", a.subject FROM work_submissions ws JOIN grade_assessments a ON a.id = ws.assessment_id
+      WHERE ws.id = ? AND ws.school_id = ? AND a.school_id = ?`, submissionFileMatch[1], user.school_id, user.school_id)
+    if (!submission) return json(response, 404, { error: 'No encontramos ese archivo.' })
+    const staff = ['admin', 'secretaria'].includes(user.role)
+    const teacher = user.role === 'docente' && await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND user_id = ?', submission.courseId, submission.subject, user.id)
+    const linked = ['acudiente', 'estudiante'].includes(user.role) && await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, submission.studentId)
+    if (!staff && !teacher && !linked) return json(response, 403, { error: 'No tienes permiso para descargar este trabajo.' })
+    const safeName = encodeURIComponent(submission.fileName).replaceAll("'", '%27')
+    response.writeHead(200, { 'Content-Type': submission.contentType, 'Content-Length': String(submission.fileSize), 'Content-Disposition': `attachment; filename*=UTF-8''${safeName}`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
+    response.end(submission.fileData)
+    return
+  }
+
   if (url.pathname === '/api/enrollments' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar matrículas.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`

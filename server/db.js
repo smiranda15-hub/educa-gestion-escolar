@@ -191,6 +191,8 @@ export async function migrate() {
       subject TEXT NOT NULL,
       period TEXT NOT NULL,
       title TEXT NOT NULL,
+      instructions TEXT NOT NULL DEFAULT '',
+      due_at TEXT,
       max_score REAL NOT NULL CHECK (max_score > 0),
       created_by TEXT NOT NULL REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
@@ -206,6 +208,21 @@ export async function migrate() {
       PRIMARY KEY (assessment_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS student_grades_student_idx ON student_grades(student_id);
+    CREATE TABLE IF NOT EXISTS work_submissions (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      uploaded_by TEXT NOT NULL REFERENCES users(id),
+      submission_no INTEGER NOT NULL CHECK (submission_no > 0),
+      original_file_name TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      file_size INTEGER NOT NULL CHECK (file_size > 0),
+      file_data ${usePostgres ? 'BYTEA' : 'BLOB'} NOT NULL,
+      uploaded_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (assessment_id, student_id, submission_no)
+    );
+    CREATE INDEX IF NOT EXISTS work_submissions_assessment_student_idx ON work_submissions(assessment_id, student_id, submission_no);
     CREATE TABLE IF NOT EXISTS communications (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -228,11 +245,16 @@ export async function migrate() {
   if (usePostgres) {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'deleted_at'")) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'courses' AND column_name = 'is_active'")) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'instructions'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'due_at'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
   } else {
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
     const courseColumns = await db.all('PRAGMA table_info(courses)')
     if (!courseColumns.some(column => column.name === 'is_active')) await db.exec('ALTER TABLE courses ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
+    const assessmentColumns = await db.all('PRAGMA table_info(grade_assessments)')
+    if (!assessmentColumns.some(column => column.name === 'instructions')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+    if (!assessmentColumns.some(column => column.name === 'due_at')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
@@ -243,6 +265,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 7)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 8)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 9)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 10)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
