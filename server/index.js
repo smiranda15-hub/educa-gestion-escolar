@@ -731,8 +731,14 @@ async function route(request, response) {
       AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa evaluación.' })
     const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, sg.score, sg.comment, sg.updated_at AS "updatedAt"
-      FROM students st LEFT JOIN student_grades sg ON sg.student_id = st.id AND sg.assessment_id = ?
-      WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo' ORDER BY st.full_name`, assessment.id, user.school_id, assessment.grade)
+      FROM students st JOIN courses assessment_course ON assessment_course.id = ? AND assessment_course.school_id = st.school_id
+      LEFT JOIN student_grades sg ON sg.student_id = st.id AND sg.assessment_id = ?
+      WHERE st.school_id = ? AND st.status = 'Activo' AND (
+        EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
+          AND se.course_id = assessment_course.id AND se.academic_year = assessment_course.academic_year AND se.status = 'Activa')
+        OR (st.grade = assessment_course.grade AND NOT EXISTS (SELECT 1 FROM student_enrollments se
+          WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))
+      ) ORDER BY st.full_name`, assessment.courseId, assessment.id, user.school_id)
     return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore), weightPercent: Number(assessment.weightPercent) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
   }
   const gradeAssessmentWeightMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/weight$/i)
@@ -793,7 +799,7 @@ async function route(request, response) {
     if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar calificaciones.' })
     const body = await readBody(request)
     if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos una calificación para guardar.' })
-    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.max_score AS "maxScore", c.grade
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.max_score AS "maxScore", c.grade, c.academic_year AS "academicYear"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.is_active = 1`, gradeScoresMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
@@ -803,7 +809,12 @@ async function route(request, response) {
     const maxScore = Number(assessment.maxScore)
     const records = body.records.map(record => ({ studentId: String(record.studentId || ''), score: record.score, comment: String(record.comment || '').trim() }))
     if (records.some(record => !/^[0-9a-f-]{36}$/i.test(record.studentId) || typeof record.score !== 'number' || !Number.isFinite(record.score) || record.score < 0 || record.score > maxScore || record.comment.length > 500) || new Set(records.map(record => record.studentId)).size !== records.length) return json(response, 400, { error: `Revisa las notas: deben estar entre 0 y ${maxScore}, sin estudiantes repetidos.` })
-    for (const record of records) if (!await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND grade = ? AND status = 'Activo'", record.studentId, user.school_id, assessment.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este grupo activo.' })
+    for (const record of records) if (!await db.get(`SELECT st.id FROM students st WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo'
+      AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
+        AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
+        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se
+          WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`,
+      record.studentId, user.school_id, assessment.courseId, assessment.academicYear, assessment.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este curso activo.' })
     await db.transaction(async tx => {
       for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -930,9 +941,12 @@ async function route(request, response) {
       LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
         WHERE ws.assessment_id = a.id AND ws.student_id = ? ORDER BY ws.submission_no DESC LIMIT 1)
       WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
-        AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
-          WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)
-      ORDER BY a.due_at, a.subject, a.title`, student.id, student.id, user.school_id, user.school_id, student.grade)
+        AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
+          AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
+          OR (NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.status = 'Activa')
+            AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
+              WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)))
+      ORDER BY a.due_at, a.subject, a.title`, student.id, student.id, user.school_id, user.school_id, student.grade, student.id, student.id)
     return json(response, 200, { assignments: assignments.map(item => ({ ...item, score: item.score === null ? null : Number(item.score), maxScore: Number(item.maxScore) })) })
   }
   const studentSubmissionMatch = url.pathname.match(/^\/api\/portal\/assignments\/([0-9a-f-]{36})\/submissions$/i)
@@ -944,8 +958,11 @@ async function route(request, response) {
     if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const assessment = await db.get(`SELECT a.id, c.grade FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
-        AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
-          WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)`, studentSubmissionMatch[1], user.school_id, user.school_id, student.grade)
+        AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
+          AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
+          OR (NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.status = 'Activa')
+            AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
+              WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)))`, studentSubmissionMatch[1], user.school_id, user.school_id, student.grade, student.id, student.id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa tarea activa para el grado de este estudiante.' })
     const base64 = String(body.fileBase64 || '')
     if (!base64 || base64.length > 11_184_812 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) return json(response, 400, { error: 'El archivo está vacío o no es válido.' })
@@ -980,9 +997,15 @@ async function route(request, response) {
         latest.id AS "submissionId", latest.original_file_name AS "fileName", latest.uploaded_at AS "uploadedAt",
         latest.submission_no AS "submissionNo",
         (SELECT COUNT(*) FROM work_submissions ws WHERE ws.assessment_id = ? AND ws.student_id = st.id) AS attempts
-      FROM students st LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
+      FROM students st JOIN courses assessment_course ON assessment_course.id = ? AND assessment_course.school_id = st.school_id
+      LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
         WHERE ws.assessment_id = ? AND ws.student_id = st.id ORDER BY ws.submission_no DESC LIMIT 1)
-      WHERE st.school_id = ? AND st.grade = ? AND st.status = 'Activo' ORDER BY st.full_name`, assessment.id, assessment.id, user.school_id, assessment.grade)
+      WHERE st.school_id = ? AND st.status = 'Activo' AND (
+        EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
+          AND se.course_id = assessment_course.id AND se.academic_year = assessment_course.academic_year AND se.status = 'Activa')
+        OR (st.grade = assessment_course.grade AND NOT EXISTS (SELECT 1 FROM student_enrollments se
+          WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))
+      ) ORDER BY st.full_name`, assessment.id, assessment.courseId, assessment.id, user.school_id)
     return json(response, 200, { submissions: submissions.map(row => ({ ...row, attempts: Number(row.attempts) })) })
   }
   const submissionFileMatch = url.pathname.match(/^\/api\/grades\/submissions\/([0-9a-f-]{36})\/file$/i)
