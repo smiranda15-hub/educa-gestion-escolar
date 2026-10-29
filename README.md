@@ -49,6 +49,7 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - Docentes pueden crear evaluaciones y trabajos con instrucciones, fecha límite y puntaje máximo, registrar notas y consultar las entregas de sus cursos asignados.
 - Estudiantes y acudientes vinculados consultan trabajos del año lectivo activo y pueden subir hasta 10 versiones por actividad; se admiten PDF, JPG, PNG, DOCX y XLSX de hasta 8 MB. El contenido se almacena en la base de datos, no en archivos temporales del servidor.
 - Boletines por estudiante, curso, asignatura y periodo muestran evaluaciones, notas, observaciones y promedio ponderado. Administración, secretaría o el docente asignado pueden definir ponderación por evaluación, escala mínima/máxima y nota aprobatoria; el boletín conserva el porcentaje normalizado y muestra el equivalente institucional cuando la regla está configurada. El PDF se genera desde Imprimir en el navegador.
+- Administración y secretaría pueden publicar o retirar boletines por año lectivo y periodo; acudientes y estudiantes solo consultan los periodos publicados.
 - Las entregas y los boletines se limitan en el backend al colegio, al estudiante vinculado y a las asignaturas de cada docente.
 - La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña no está disponible todavía.
 

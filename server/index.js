@@ -829,10 +829,37 @@ async function route(request, response) {
     } else {
       students = await db.all('SELECT id, full_name AS name, grade FROM students WHERE school_id = ? ORDER BY grade, full_name', user.school_id)
     }
+    const portalRole = ['acudiente', 'estudiante'].includes(user.role)
+    const publications = await db.all(`SELECT academic_year AS "academicYear", period, is_published AS "isPublished",
+        published_at AS "publishedAt" FROM grade_period_publications WHERE school_id = ? ${portalRole ? 'AND is_published = 1' : ''}
+        ORDER BY academic_year DESC, period`, user.school_id)
     let years
     if (user.role === 'docente') years = await db.all(`SELECT DISTINCT c.academic_year AS year FROM courses c JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND ct.user_id = ? ORDER BY c.academic_year DESC`, user.school_id, user.id)
+    else if (portalRole) years = [...new Set(publications.map(publication => publication.academicYear))].map(year => ({ year }))
     else years = await db.all('SELECT DISTINCT academic_year AS year FROM courses WHERE school_id = ? ORDER BY academic_year DESC', user.school_id)
-    return json(response, 200, { students, years: years.map(item => item.year), periods: ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4'] })
+    return json(response, 200, { students, years: years.map(item => item.year), periods: ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4'], publications: publications.map(item => ({ ...item, isPublished: Boolean(item.isPublished) })) })
+  }
+  if (url.pathname === '/api/grades/publications' && method === 'PUT') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden publicar boletines.' })
+    const body = await readBody(request)
+    const academicYear = String(body.academicYear || '')
+    const period = String(body.period || '')
+    if (!/^\d{4}-\d{4}$/.test(academicYear) || !/^Periodo [1-4]$/.test(period) || typeof body.published !== 'boolean') return json(response, 400, { error: 'Selecciona año lectivo, periodo y estado de publicación válidos.' })
+    if (body.published) {
+      const grades = Number((await db.get(`SELECT COUNT(*) AS count FROM student_grades sg
+        JOIN grade_assessments a ON a.id = sg.assessment_id JOIN courses c ON c.id = a.course_id
+        WHERE a.school_id = ? AND c.school_id = ? AND c.academic_year = ? AND a.period = ?`, user.school_id, user.school_id, academicYear, period)).count)
+      if (!grades) return json(response, 409, { error: 'No hay notas registradas para publicar en este año y periodo.' })
+    }
+    const publishedAt = body.published ? new Date().toISOString() : null
+    const publicationId = randomUUID()
+    await db.run(`INSERT INTO grade_period_publications (id, school_id, academic_year, period, is_published, published_by, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(school_id, academic_year, period) DO UPDATE SET is_published = excluded.is_published,
+        published_by = excluded.published_by, published_at = excluded.published_at`,
+      publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
+    await logAudit(user.school_id, user.id, body.published ? 'grade_period_published' : 'grade_period_unpublished')
+    return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
     if (!['admin', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
@@ -843,6 +870,8 @@ async function route(request, response) {
     const student = await db.get('SELECT id, full_name AS name, grade, status FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
     if (!student) return json(response, 404, { error: 'No encontramos al estudiante en este colegio.' })
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, student.id)) return json(response, 403, { error: 'Solo puedes consultar los boletines de estudiantes vinculados a tu cuenta.' })
+    const publication = await db.get('SELECT is_published AS "isPublished" FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND period = ?', user.school_id, academicYear, period)
+    if (['acudiente', 'estudiante'].includes(user.role) && !publication?.isPublished) return json(response, 403, { error: 'Este boletín todavía no ha sido publicado por el colegio.' })
     if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers ct JOIN courses c ON c.id = ct.course_id WHERE ct.user_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ?', user.id, user.school_id, student.grade, academicYear)) return json(response, 403, { error: 'No tienes una asignatura asignada a ese estudiante para el año lectivo seleccionado.' })
     const marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
         a.due_at AS "dueAt", a.weight_percent AS "weightPercent", rule.scale_min AS "scaleMin",
@@ -885,7 +914,7 @@ async function route(request, response) {
       }
     })
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student, academicYear, period, subjects, generatedAt: new Date().toISOString() })
+    return json(response, 200, { student, academicYear, period, subjects, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })

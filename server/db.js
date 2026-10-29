@@ -225,6 +225,17 @@ export async function migrate() {
       UNIQUE (course_id, subject, period)
     );
     CREATE INDEX IF NOT EXISTS academic_grade_rules_school_idx ON academic_grade_rules(school_id, course_id, period);
+    CREATE TABLE IF NOT EXISTS grade_period_publications (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      academic_year TEXT NOT NULL,
+      period TEXT NOT NULL,
+      is_published INTEGER NOT NULL DEFAULT 1,
+      published_by TEXT NOT NULL REFERENCES users(id),
+      published_at TEXT,
+      UNIQUE (school_id, academic_year, period)
+    );
+    CREATE INDEX IF NOT EXISTS grade_period_publications_scope_idx ON grade_period_publications(school_id, academic_year, is_published);
     CREATE TABLE IF NOT EXISTS work_submissions (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -286,6 +297,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 9)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 10)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 11)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 12)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
