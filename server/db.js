@@ -120,9 +120,27 @@ export async function migrate() {
       PRIMARY KEY (user_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS user_students_student_idx ON user_students(student_id);
+    CREATE TABLE IF NOT EXISTS courses (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      name TEXT NOT NULL,
+      grade TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (school_id, academic_year, grade)
+    );
+    CREATE TABLE IF NOT EXISTS course_teachers (
+      course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      PRIMARY KEY (course_id, user_id, subject)
+    );
+    CREATE INDEX IF NOT EXISTS course_teachers_user_idx ON course_teachers(user_id);
   `)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
