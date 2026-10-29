@@ -193,6 +193,8 @@ export async function migrate() {
       title TEXT NOT NULL,
       instructions TEXT NOT NULL DEFAULT '',
       due_at TEXT,
+      delivery_mode TEXT NOT NULL DEFAULT 'file' CHECK (delivery_mode IN ('file','online')),
+      is_published INTEGER NOT NULL DEFAULT 1,
       weight_percent REAL NOT NULL DEFAULT 100 CHECK (weight_percent > 0 AND weight_percent <= 100),
       max_score REAL NOT NULL CHECK (max_score > 0),
       created_by TEXT NOT NULL REFERENCES users(id),
@@ -251,6 +253,29 @@ export async function migrate() {
       UNIQUE (assessment_id, student_id, submission_no)
     );
     CREATE INDEX IF NOT EXISTS work_submissions_assessment_student_idx ON work_submissions(assessment_id, student_id, submission_no);
+    CREATE TABLE IF NOT EXISTS online_assessment_questions (
+      id TEXT PRIMARY KEY,
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      question_no INTEGER NOT NULL CHECK (question_no > 0),
+      prompt TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      correct_option INTEGER NOT NULL CHECK (correct_option >= 0),
+      points REAL NOT NULL CHECK (points > 0),
+      UNIQUE (assessment_id, question_no)
+    );
+    CREATE INDEX IF NOT EXISTS online_assessment_questions_order_idx ON online_assessment_questions(assessment_id, question_no);
+    CREATE TABLE IF NOT EXISTS online_assessment_attempts (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id),
+      started_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      submitted_at TEXT,
+      answers_json TEXT NOT NULL DEFAULT '{}',
+      score REAL,
+      UNIQUE (assessment_id, student_id)
+    );
+    CREATE INDEX IF NOT EXISTS online_assessment_attempts_school_idx ON online_assessment_attempts(school_id, assessment_id, student_id);
     CREATE TABLE IF NOT EXISTS communications (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -276,6 +301,8 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'instructions'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'due_at'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'weight_percent'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'delivery_mode'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
   } else {
     const userColumns = await db.all('PRAGMA table_info(users)')
     if (!userColumns.some(column => column.name === 'deleted_at')) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
@@ -285,6 +312,8 @@ export async function migrate() {
     if (!assessmentColumns.some(column => column.name === 'instructions')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
     if (!assessmentColumns.some(column => column.name === 'due_at')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN due_at TEXT')
     if (!assessmentColumns.some(column => column.name === 'weight_percent')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN weight_percent REAL NOT NULL DEFAULT 100')
+    if (!assessmentColumns.some(column => column.name === 'delivery_mode')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
+    if (!assessmentColumns.some(column => column.name === 'is_published')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
@@ -298,6 +327,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 10)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 11)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 12)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 13)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
