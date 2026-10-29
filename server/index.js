@@ -48,7 +48,7 @@ const getSession = async request => {
   if (!token || token.length > 200) return null
   return db.get(`SELECT u.id, u.school_id, u.email, u.full_name, u.role, s.name AS school_name, s.slug AS school_slug
     FROM sessions x JOIN users u ON x.user_id = u.id JOIN schools s ON s.id = u.school_id
-    WHERE x.token_hash = ? AND x.expires_at > ? AND u.is_active = 1`, hashToken(token), Date.now())
+    WHERE x.token_hash = ? AND x.expires_at > ? AND u.is_active = 1 AND u.deleted_at IS NULL`, hashToken(token), Date.now())
 }
 const sessionCookie = (token, maxAge) => `educa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie}`
 const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug } })
@@ -98,7 +98,7 @@ async function route(request, response) {
     const slug = slugify(String(body.school || '').trim())
     const email = String(body.email || '').trim().toLowerCase()
     const user = await db.get(`SELECT u.*, s.name AS school_name, s.slug AS school_slug FROM users u JOIN schools s ON s.id = u.school_id
-      WHERE s.slug = ? AND u.email = ? AND u.is_active = 1`, slug, email)
+      WHERE s.slug = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
     const matched = await verifyPassword(String(body.password || ''), user?.password_hash || '00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000')
     if (!user || !matched) {
       attempts.count += 1
@@ -179,8 +179,9 @@ async function route(request, response) {
   if (url.pathname === '/api/users' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede consultar las cuentas del colegio.' })
     const users = await db.all(`SELECT id, email, full_name AS name, role, is_active AS active, created_at AS "createdAt"
-      FROM users WHERE school_id = ? ORDER BY full_name`, user.school_id)
-    return json(response, 200, { users })
+      FROM users WHERE school_id = ? AND deleted_at IS NULL ORDER BY full_name`, user.school_id)
+    const linked = await Promise.all(users.map(async account => ({ ...account, studentIds: (await db.all('SELECT student_id FROM user_students WHERE user_id = ?', account.id)).map(row => row.student_id) })))
+    return json(response, 200, { users: linked })
   }
   if (url.pathname === '/api/users' && method === 'POST') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede crear cuentas.' })
@@ -214,6 +215,59 @@ async function route(request, response) {
     await logAudit(user.school_id, user.id, 'user_created')
     return json(response, 201, { user: { id, email, name, role, active: 1 } })
   }
+  const userRecordMatch = url.pathname.match(/^\/api\/users\/([0-9a-f-]{36})$/i)
+  if (userRecordMatch && method === 'PUT') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede editar cuentas.' })
+    const targetId = userRecordMatch[1]
+    const current = await db.get('SELECT id, role FROM users WHERE id = ? AND school_id = ? AND deleted_at IS NULL', targetId, user.school_id)
+    if (!current) return json(response, 404, { error: 'No encontramos esa cuenta en este colegio.' })
+    const body = await readBody(request)
+    const name = String(body.name || '').trim()
+    const email = String(body.email || '').trim().toLowerCase()
+    const role = String(body.role || '')
+    const password = String(body.password || '')
+    const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map(value => String(value)))] : []
+    if (name.length < 2 || name.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !accountRoles.has(role)) return json(response, 400, { error: 'Revisa el nombre, correo y rol de la cuenta.' })
+    if (password && (password.length < 12 || password.length > 128)) return json(response, 400, { error: 'La nueva contraseña debe tener entre 12 y 128 caracteres.' })
+    if (targetId === user.id && role !== current.role) return json(response, 400, { error: 'No puedes cambiar tu propio rol administrativo.' })
+    if (role === 'acudiente' && studentIds.length === 0) return json(response, 400, { error: 'Asocia al menos un estudiante activo a la cuenta del acudiente.' })
+    if (role === 'estudiante' && studentIds.length !== 1) return json(response, 400, { error: 'Asocia exactamente un estudiante activo a esta cuenta.' })
+    if (!['acudiente', 'estudiante'].includes(role) && studentIds.length) return json(response, 400, { error: 'Este rol no puede asociarse directamente a estudiantes.' })
+    for (const studentId of studentIds) if (!await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)) return json(response, 400, { error: 'Uno de los estudiantes seleccionados no está activo en este colegio.' })
+    try {
+      const passwordHash = password ? await hashPassword(password) : null
+      await db.transaction(async tx => {
+        await tx.run(`UPDATE users SET email = ?, full_name = ?, role = ?, password_hash = COALESCE(?, password_hash)
+          WHERE id = ? AND school_id = ?`, email, name, role, passwordHash, targetId, user.school_id)
+        await tx.run('DELETE FROM user_students WHERE user_id = ?', targetId)
+        for (const studentId of studentIds) await tx.run('INSERT INTO user_students (user_id, student_id, relationship) VALUES (?, ?, ?)', targetId, studentId, role)
+        if (role !== 'docente') await tx.run('DELETE FROM course_teachers WHERE user_id = ?', targetId)
+      })
+    } catch (error) {
+      if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe una cuenta con ese correo en el colegio.' })
+      throw error
+    }
+    if (password) await db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', targetId, hashToken(cookieToken(request)))
+    await logAudit(user.school_id, user.id, 'user_updated')
+    return json(response, 200, { id: targetId, email, name, role })
+  }
+  if (userRecordMatch && method === 'DELETE') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede eliminar cuentas.' })
+    const targetId = userRecordMatch[1]
+    if (targetId === user.id) return json(response, 400, { error: 'No puedes eliminar tu propia cuenta.' })
+    const target = await db.get('SELECT id, role, is_active FROM users WHERE id = ? AND school_id = ? AND deleted_at IS NULL', targetId, user.school_id)
+    if (!target) return json(response, 404, { error: 'No encontramos esa cuenta en este colegio.' })
+    if (target.role === 'admin' && target.is_active && Number((await db.get("SELECT COUNT(*) AS count FROM users WHERE school_id = ? AND role = 'admin' AND is_active = 1 AND deleted_at IS NULL", user.school_id)).count) <= 1) return json(response, 409, { error: 'No se puede eliminar al último administrador activo del colegio.' })
+    const replacementEmail = `deleted-${targetId}@invalid.local`
+    await db.transaction(async tx => {
+      await tx.run('UPDATE users SET email = ?, is_active = 0, deleted_at = ? WHERE id = ? AND school_id = ?', replacementEmail, new Date().toISOString(), targetId, user.school_id)
+      await tx.run('DELETE FROM sessions WHERE user_id = ?', targetId)
+      await tx.run('DELETE FROM user_students WHERE user_id = ?', targetId)
+      await tx.run('DELETE FROM course_teachers WHERE user_id = ?', targetId)
+    })
+    await logAudit(user.school_id, user.id, 'user_deleted')
+    return json(response, 200, { deleted: true })
+  }
   const userStatusMatch = url.pathname.match(/^\/api\/users\/([0-9a-f-]{36})\/status$/i)
   if (userStatusMatch && method === 'PATCH') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede cambiar el estado de una cuenta.' })
@@ -221,7 +275,10 @@ async function route(request, response) {
     if (targetId === user.id) return json(response, 400, { error: 'No puedes desactivar tu propia cuenta.' })
     const body = await readBody(request)
     if (typeof body.active !== 'boolean') return json(response, 400, { error: 'Indica el nuevo estado de la cuenta.' })
-    const result = await db.run('UPDATE users SET is_active = ? WHERE id = ? AND school_id = ?', body.active ? 1 : 0, targetId, user.school_id)
+    const target = await db.get('SELECT role, is_active FROM users WHERE id = ? AND school_id = ? AND deleted_at IS NULL', targetId, user.school_id)
+    if (!target) return json(response, 404, { error: 'No encontramos esa cuenta en tu colegio.' })
+    if (!body.active && target.role === 'admin' && target.is_active && Number((await db.get("SELECT COUNT(*) AS count FROM users WHERE school_id = ? AND role = 'admin' AND is_active = 1 AND deleted_at IS NULL", user.school_id)).count) <= 1) return json(response, 409, { error: 'No se puede desactivar al último administrador activo del colegio.' })
+    const result = await db.run('UPDATE users SET is_active = ? WHERE id = ? AND school_id = ? AND deleted_at IS NULL', body.active ? 1 : 0, targetId, user.school_id)
     if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos esa cuenta en tu colegio.' })
     if (!body.active) await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
     await logAudit(user.school_id, user.id, body.active ? 'user_activated' : 'user_deactivated')
@@ -237,7 +294,7 @@ async function route(request, response) {
   }
   if (url.pathname === '/api/teachers' && method === 'GET') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar docentes.' })
-    const teachers = await db.all("SELECT id, full_name AS name FROM users WHERE school_id = ? AND role = 'docente' AND is_active = 1 ORDER BY full_name", user.school_id)
+    const teachers = await db.all("SELECT id, full_name AS name FROM users WHERE school_id = ? AND role = 'docente' AND is_active = 1 AND deleted_at IS NULL ORDER BY full_name", user.school_id)
     return json(response, 200, { teachers })
   }
 
@@ -248,7 +305,7 @@ async function route(request, response) {
       FROM courses c LEFT JOIN course_teachers ct ON ct.course_id = c.id
       WHERE c.school_id = ? GROUP BY c.id ORDER BY c.academic_year DESC, c.grade`, user.school_id)
     const mapped = await Promise.all(courses.map(async course => ({ ...course, teacherCount: Number(course.teacherCount), teachers: await db.all(`SELECT u.id, u.full_name AS name, ct.subject
-      FROM course_teachers ct JOIN users u ON u.id = ct.user_id WHERE ct.course_id = ? ORDER BY u.full_name, ct.subject`, course.id) })))
+      FROM course_teachers ct JOIN users u ON u.id = ct.user_id WHERE ct.course_id = ? AND u.deleted_at IS NULL ORDER BY u.full_name, ct.subject`, course.id) })))
     return json(response, 200, { courses: mapped })
   }
   if (url.pathname === '/api/courses' && method === 'POST') {
@@ -278,6 +335,34 @@ async function route(request, response) {
     catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ese docente ya tiene asignada esa asignatura en el curso.' }); throw error }
     await logAudit(user.school_id, user.id, 'teacher_assigned')
     return json(response, 201, { assigned: true })
+  }
+  if (courseTeacherMatch && method === 'PUT') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar asignaciones docentes.' })
+    const body = await readBody(request)
+    const originalTeacherId = String(body.originalTeacherId || '')
+    const originalSubject = String(body.originalSubject || '').trim()
+    const teacherId = String(body.teacherId || '')
+    const subject = String(body.subject || '').trim()
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', courseTeacherMatch[1], user.school_id)
+    const teacher = await db.get("SELECT id FROM users WHERE id = ? AND school_id = ? AND role = 'docente' AND is_active = 1 AND deleted_at IS NULL", teacherId, user.school_id)
+    const assignment = await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ? AND subject = ?', courseTeacherMatch[1], originalTeacherId, originalSubject)
+    if (!course || !teacher || !assignment) return json(response, 404, { error: 'No encontramos el curso, la asignación o el docente activo.' })
+    if (subject.length < 2 || subject.length > 80) return json(response, 400, { error: 'Escribe una asignatura válida.' })
+    try { await db.run('UPDATE course_teachers SET user_id = ?, subject = ? WHERE course_id = ? AND user_id = ? AND subject = ?', teacher.id, subject, course.id, originalTeacherId, originalSubject) }
+    catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ese docente ya tiene asignada esa asignatura en el curso.' }); throw error }
+    await logAudit(user.school_id, user.id, 'teacher_assignment_updated')
+    return json(response, 200, { updated: true })
+  }
+  if (courseTeacherMatch && method === 'DELETE') {
+    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para quitar asignaciones docentes.' })
+    const body = await readBody(request)
+    const teacherId = String(body.teacherId || '')
+    const subject = String(body.subject || '').trim()
+    const result = await db.run(`DELETE FROM course_teachers WHERE course_id = ? AND user_id = ? AND subject = ?
+      AND course_id IN (SELECT id FROM courses WHERE school_id = ?)`, courseTeacherMatch[1], teacherId, subject, user.school_id)
+    if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos esa asignación en este colegio.' })
+    await logAudit(user.school_id, user.id, 'teacher_assignment_deleted')
+    return json(response, 200, { deleted: true })
   }
   if (url.pathname === '/api/teacher/courses' && method === 'GET') {
     if (user.role !== 'docente') return json(response, 403, { error: 'Este acceso es solo para docentes.' })
