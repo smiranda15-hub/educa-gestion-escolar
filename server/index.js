@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
-import { extname, resolve, sep } from 'node:path'
+import { basename, extname, resolve, sep } from 'node:path'
 import { db, logAudit, migrate, databaseType } from './db.js'
 
 const scrypt = promisify(scryptCallback)
@@ -23,12 +23,31 @@ const readBody = async (request) => {
   }
   try { return JSON.parse(data || '{}') } catch { throw Object.assign(new Error('JSON inválido'), { status: 400 }) }
 }
+const readLargeJsonBody = async (request, maxBytes = 12 * 1024 * 1024) => {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > maxBytes) throw Object.assign(new Error('El archivo supera el tamaño máximo permitido.'), { status: 413 })
+    chunks.push(Buffer.from(chunk))
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') }
+  catch { throw Object.assign(new Error('JSON inválido'), { status: 400 }) }
+}
 const slugify = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
 const validDate = value => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const parsed = new Date(`${value}T00:00:00.000Z`)
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
+const workFileTypes = new Map([
+  ['.pdf', { mime: 'application/pdf', magic: bytes => bytes.subarray(0, 5).toString() === '%PDF-' }],
+  ['.png', { mime: 'image/png', magic: bytes => bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' }],
+  ['.jpg', { mime: 'image/jpeg', magic: bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff' }],
+  ['.jpeg', { mime: 'image/jpeg', magic: bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff' }],
+  ['.docx', { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', magic: bytes => bytes.subarray(0, 4).toString('hex') === '504b0304' }],
+  ['.xlsx', { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', magic: bytes => bytes.subarray(0, 4).toString('hex') === '504b0304' }],
+])
 const hashPassword = async password => {
   const salt = randomBytes(16)
   const derived = await scrypt(password, salt, 64)
@@ -245,6 +264,88 @@ async function route(request, response) {
     const result = await db.run('UPDATE communication_recipients SET read_at = CURRENT_TIMESTAMP WHERE communication_id = ? AND user_id = ? AND communication_id IN (SELECT id FROM communications WHERE school_id = ?)', communicationReadMatch[1], user.id, user.school_id)
     if (!result.rowCount && !result.changes) return json(response, 404, { error: 'No encontramos esta comunicación en tu bandeja.' })
     return json(response, 200, { read: true })
+  }
+
+  if (url.pathname === '/api/reports/options' && method === 'GET') {
+    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar estos filtros.' })
+    const courses = user.role === 'docente'
+      ? await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear" FROM courses c
+          JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND ct.user_id = ?
+          GROUP BY c.id ORDER BY c.academic_year DESC, c.grade, c.name`, user.school_id, user.id)
+      : await db.all('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE school_id = ? ORDER BY academic_year DESC, grade, name', user.school_id)
+    return json(response, 200, { courses })
+  }
+  if (url.pathname === '/api/reports' && method === 'GET') {
+    const type = String(url.searchParams.get('type') || '')
+    const allowedRoles = {
+      students: ['admin', 'secretaria', 'docente'],
+      attendance: ['admin', 'secretaria', 'docente'],
+      grades: ['admin', 'secretaria', 'docente'],
+      enrollments: ['admin', 'secretaria'],
+    }
+    if (!allowedRoles[type]) return json(response, 400, { error: 'Selecciona un tipo de reporte válido.' })
+    if (!allowedRoles[type].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a este reporte.' })
+    const from = String(url.searchParams.get('from') || '')
+    const to = String(url.searchParams.get('to') || '')
+    const courseId = String(url.searchParams.get('courseId') || '')
+    const academicYear = String(url.searchParams.get('academicYear') || '')
+    if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) return json(response, 400, { error: 'Revisa el rango de fechas.' })
+    if (academicYear && !/^\d{4}-\d{4}$/.test(academicYear)) return json(response, 400, { error: 'El año lectivo no es válido.' })
+    let selectedCourse = null
+    if (courseId) {
+      selectedCourse = await db.get('SELECT id, grade FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
+      if (!selectedCourse) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
+      if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', courseId, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
+    }
+    const params = [user.school_id]
+    let sql = ''
+    if (type === 'students') {
+      sql = `SELECT st.full_name AS "Estudiante", st.grade AS "Grado", st.status AS "Estado"
+        FROM students st WHERE st.school_id = ?`
+      if (selectedCourse) { sql += ' AND (st.grade = ? OR EXISTS (SELECT 1 FROM student_enrollments se WHERE se.student_id = st.id AND se.course_id = ? AND se.status = \'Activa\'))'; params.push(selectedCourse.grade, selectedCourse.id) }
+      if (academicYear) { sql += ` AND EXISTS (SELECT 1 FROM courses cy WHERE cy.school_id = st.school_id AND cy.grade = st.grade AND cy.academic_year = ?)`; params.push(academicYear) }
+      if (user.role === 'docente') { sql += ` AND EXISTS (SELECT 1 FROM course_teachers ct JOIN courses cc ON cc.id = ct.course_id WHERE ct.user_id = ? AND cc.school_id = st.school_id AND cc.grade = st.grade)`; params.push(user.id) }
+      sql += ' ORDER BY st.grade, st.full_name LIMIT 5001'
+    } else if (type === 'attendance') {
+      sql = `SELECT st.full_name AS "Estudiante", c.grade AS "Grado", c.name AS "Curso", c.academic_year AS "Año lectivo",
+        ar.attendance_date AS "Fecha", ar.status AS "Asistencia", actor.full_name AS "Registró"
+        FROM attendance_records ar JOIN students st ON st.id = ar.student_id JOIN courses c ON c.id = ar.course_id
+        JOIN users actor ON actor.id = ar.marked_by WHERE ar.school_id = ? AND c.school_id = ?`
+      params.push(user.school_id)
+      if (from) { sql += ' AND ar.attendance_date >= ?'; params.push(from) }
+      if (to) { sql += ' AND ar.attendance_date <= ?'; params.push(to) }
+      if (selectedCourse) { sql += ' AND c.id = ?'; params.push(selectedCourse.id) }
+      if (academicYear) { sql += ' AND c.academic_year = ?'; params.push(academicYear) }
+      if (user.role === 'docente') { sql += ' AND EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.user_id = ?)'; params.push(user.id) }
+      sql += ' ORDER BY ar.attendance_date DESC, c.grade, st.full_name LIMIT 5001'
+    } else if (type === 'grades') {
+      sql = `SELECT st.full_name AS "Estudiante", c.grade AS "Grado", c.name AS "Curso", c.academic_year AS "Año lectivo",
+        a.subject AS "Asignatura", a.period AS "Periodo", a.title AS "Evaluación", sg.score AS "Nota", a.max_score AS "Nota máxima",
+        sg.updated_at AS "Actualizada"
+        FROM student_grades sg JOIN students st ON st.id = sg.student_id
+        JOIN grade_assessments a ON a.id = sg.assessment_id JOIN courses c ON c.id = a.course_id
+        WHERE a.school_id = ? AND c.school_id = ?`
+      params.push(user.school_id)
+      if (from) { sql += ' AND substr(sg.updated_at, 1, 10) >= ?'; params.push(from) }
+      if (to) { sql += ' AND substr(sg.updated_at, 1, 10) <= ?'; params.push(to) }
+      if (selectedCourse) { sql += ' AND c.id = ?'; params.push(selectedCourse.id) }
+      if (academicYear) { sql += ' AND c.academic_year = ?'; params.push(academicYear) }
+      if (user.role === 'docente') { sql += ' AND EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?)'; params.push(user.id) }
+      sql += ' ORDER BY c.grade, a.subject, a.period, st.full_name LIMIT 5001'
+    } else {
+      sql = `SELECT st.full_name AS "Estudiante", st.document AS "Documento", se.academic_year AS "Año lectivo",
+        c.grade AS "Grado", c.name AS "Curso", se.start_date AS "Inicio", se.end_date AS "Fin", se.status AS "Estado"
+        FROM student_enrollments se JOIN students st ON st.id = se.student_id LEFT JOIN courses c ON c.id = se.course_id
+        WHERE se.school_id = ? AND st.school_id = ?`
+      params.push(user.school_id)
+      if (from) { sql += ' AND se.start_date >= ?'; params.push(from) }
+      if (to) { sql += ' AND se.start_date <= ?'; params.push(to) }
+      if (selectedCourse) { sql += ' AND se.course_id = ?'; params.push(selectedCourse.id) }
+      if (academicYear) { sql += ' AND se.academic_year = ?'; params.push(academicYear) }
+      sql += ' ORDER BY se.academic_year DESC, c.grade, st.full_name LIMIT 5001'
+    }
+    const resultRows = await db.all(sql, ...params)
+    return json(response, 200, { records: resultRows.slice(0, 5000), truncated: resultRows.length > 5000 })
   }
 
   if (url.pathname === '/api/users' && method === 'GET') {
@@ -591,7 +692,7 @@ async function route(request, response) {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    const assessments = await db.all(`SELECT id, title, subject, period, max_score AS "maxScore", created_at AS "createdAt"
+    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", subject, period, max_score AS "maxScore", created_at AS "createdAt"
       FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
       ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
     return json(response, 200, { assessments })
@@ -603,23 +704,25 @@ async function route(request, response) {
     const subject = String(body.subject || '').trim()
     const period = String(body.period || '').trim()
     const title = String(body.title || '').trim()
+    const instructions = String(body.instructions || '').trim()
+    const dueAt = String(body.dueAt || '').trim()
     const maxScore = Number(body.maxScore)
     const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    if (subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre de la evaluación y su puntaje máximo.' })
+    if (subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || (dueAt && !validDate(dueAt)) || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, la fecha límite y el puntaje máximo.' })
     const id = randomUUID()
-    await db.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, maxScore, user.id)
+    await db.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, maxScore, user.id)
     await logAudit(user.school_id, user.id, 'grade_assessment_created')
-    return json(response, 201, { assessment: { id, courseId, subject, period, title, maxScore } })
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, maxScore } })
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
     if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
-      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.max_score AS "maxScore"
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
