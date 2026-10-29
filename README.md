@@ -38,7 +38,15 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - Las contraseñas se almacenan usando scrypt con sal; la cookie de sesión es HttpOnly, SameSite Strict y tiene una duración limitada.
 - La API filtra los estudiantes por el colegio de la sesión y registra acciones iniciales, accesos y altas en la bitácora.
 - El navegador no contiene usuarios ni contraseñas precargadas. El primer colegio lo crea quien opera el sistema.
-- La conexión PostgreSQL está preparada para Railway, pero el despliegue no se ha ejecutado desde este workspace. Antes de operar con menores, completa permisos configurables, recuperación y cambio de contraseña, CSRF/origen, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
+- La aplicación usa PostgreSQL cuando Railway provee `DATABASE_URL`; el entorno local usa SQLite. Antes de operar con menores, completa recuperación y cambio de contraseña, protección CSRF/origen, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
+
+### Usuarios y portales por rol
+
+- El administrador crea cuentas desde **Usuarios y accesos**, define el rol y una contraseña inicial; también puede activar o desactivar cuentas.
+- Para crear un acudiente, primero registra al estudiante y luego asocia uno o más estudiantes activos. Para una cuenta de estudiante, asocia exactamente un registro.
+- Acudientes y estudiantes solo reciben los nombres, grados y estados de los registros que tienen asociados. La lista general de estudiantes está limitada a administración y secretaría.
+- Docentes y los demás roles pueden iniciar sesión, pero sus cursos y módulos todavía deben implementarse y asignarse antes de mostrarles información escolar.
+- La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña no está disponible todavía.
 
 ## Construcción
 

@@ -148,13 +148,24 @@ async function route(request, response) {
     const email = String(body.email || '').trim().toLowerCase()
     const role = String(body.role || '')
     const password = String(body.password || '')
+    const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map(value => String(value)))] : []
     if (name.length < 2 || name.length > 100) return json(response, 400, { error: 'Escribe un nombre entre 2 y 100 caracteres.' })
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json(response, 400, { error: 'Ingresa un correo válido.' })
     if (!accountRoles.has(role)) return json(response, 400, { error: 'El rol seleccionado no es válido.' })
     if (password.length < 12 || password.length > 128) return json(response, 400, { error: 'La contraseña inicial debe tener entre 12 y 128 caracteres.' })
+    if (role === 'acudiente' && studentIds.length === 0) return json(response, 400, { error: 'Asocia al menos un estudiante a la cuenta del acudiente.' })
+    if (role === 'estudiante' && studentIds.length !== 1) return json(response, 400, { error: 'Asocia exactamente un registro a la cuenta del estudiante.' })
+    if (!['acudiente', 'estudiante'].includes(role) && studentIds.length) return json(response, 400, { error: 'Este rol no puede asociarse directamente a un estudiante.' })
+    for (const studentId of studentIds) {
+      if (!await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)) return json(response, 400, { error: 'Uno de los estudiantes seleccionados no está activo en este colegio.' })
+    }
     const id = randomUUID()
     try {
-      await db.run('INSERT INTO users (id, school_id, email, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)', id, user.school_id, email, name, await hashPassword(password), role)
+      const passwordHash = await hashPassword(password)
+      await db.transaction(async tx => {
+        await tx.run('INSERT INTO users (id, school_id, email, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)', id, user.school_id, email, name, passwordHash, role)
+        for (const studentId of studentIds) await tx.run('INSERT INTO user_students (user_id, student_id, relationship) VALUES (?, ?, ?)', id, studentId, role)
+      })
     } catch (error) {
       if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe una cuenta con ese correo en el colegio.' })
       throw error
@@ -174,6 +185,14 @@ async function route(request, response) {
     if (!body.active) await db.run('DELETE FROM sessions WHERE user_id = ?', targetId)
     await logAudit(user.school_id, user.id, body.active ? 'user_activated' : 'user_deactivated')
     return json(response, 200, { id: targetId, active: body.active })
+  }
+
+  if (url.pathname === '/api/portal/students' && method === 'GET') {
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este portal es solo para acudientes y estudiantes.' })
+    const students = await db.all(`SELECT st.id, st.full_name AS name, st.grade, st.status, us.relationship
+      FROM user_students us JOIN students st ON st.id = us.student_id
+      WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
+    return json(response, 200, { students })
   }
 
   if (url.pathname === '/api/students' && method === 'GET') {

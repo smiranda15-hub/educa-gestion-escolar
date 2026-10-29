@@ -112,8 +112,17 @@ export async function migrate() {
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, document)
     );
+    CREATE TABLE IF NOT EXISTS user_students (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      relationship TEXT NOT NULL CHECK (relationship IN ('acudiente','estudiante')),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      PRIMARY KEY (user_id, student_id)
+    );
+    CREATE INDEX IF NOT EXISTS user_students_student_idx ON user_students(student_id);
   `)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
