@@ -173,6 +173,24 @@ async function route(request, response) {
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
 
+  if (method === 'POST' && url.pathname === '/api/auth/password') {
+    const body = await readBody(request)
+    const currentPassword = String(body.currentPassword || '')
+    const newPassword = String(body.newPassword || '')
+    if (newPassword.length < 12 || newPassword.length > 128) return json(response, 400, { error: 'La nueva contraseña debe tener entre 12 y 128 caracteres.' })
+    const account = await db.get('SELECT password_hash AS "passwordHash" FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL', user.id, user.school_id)
+    if (!account || !await verifyPassword(currentPassword, account.passwordHash)) return json(response, 400, { error: 'La contraseña actual no es correcta.' })
+    if (await verifyPassword(newPassword, account.passwordHash)) return json(response, 400, { error: 'La nueva contraseña debe ser diferente a la actual.' })
+    const token = cookieToken(request)
+    const passwordHash = await hashPassword(newPassword)
+    await db.transaction(async tx => {
+      await tx.run('UPDATE users SET password_hash = ? WHERE id = ? AND school_id = ?', passwordHash, user.id, user.school_id)
+      await tx.run('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', user.id, hashToken(token))
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', user.school_id, user.id, 'password_changed')
+    })
+    return json(response, 200, { changed: true, message: 'Contraseña actualizada. Se cerraron las demás sesiones de tu cuenta.' })
+  }
+
   if (url.pathname === '/api/dashboard' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar este panel.' })
     const date = String(url.searchParams.get('date') || '')

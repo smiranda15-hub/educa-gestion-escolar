@@ -36,6 +36,7 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 
 - Instituciones, usuario inicial, sesiones y estudiantes se guardan en SQLite local o PostgreSQL cuando `DATABASE_URL` está configurada.
 - Las contraseñas se almacenan usando scrypt con sal; la cookie de sesión es HttpOnly, SameSite Strict y tiene una duración limitada.
+- Cada usuario autenticado puede cambiar su contraseña desde el botón de perfil; se verifica la contraseña actual, se registran los cambios y se revocan las demás sesiones de la cuenta.
 - La API filtra los estudiantes por el colegio de la sesión y registra acciones iniciales, accesos y altas en la bitácora.
 - El navegador no contiene usuarios ni contraseñas precargadas. El primer colegio lo crea quien opera el sistema.
 - La aplicación usa PostgreSQL cuando Railway provee `DATABASE_URL`; el entorno local usa SQLite. Antes de operar con menores, completa recuperación y cambio de contraseña, protección CSRF/origen, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
@@ -55,7 +56,7 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - Las entregas y los boletines se limitan en el backend al colegio, al estudiante vinculado y a las asignaturas de cada docente.
 - En **Calificaciones**, docentes asignados pueden adjuntar hasta 5 imágenes JPG, PNG o WEBP (4 MB cada una; 20 MB en total) y un enlace HTTPS de Google Forms (`forms.gle`, `forms.google.com` o `docs.google.com/forms`). Los archivos se guardan en la base de datos y solo se sirven mediante una ruta autenticada, dentro del colegio y curso correspondientes.
 - El autor o un administrador puede eliminar comunicaciones; la eliminación también las quita de las bandejas de destinatarios. En **Ver entregas**, el docente asignado puede borrar una entrega individual; su nota se conserva. Al eliminar una evaluación se borran de forma permanente sus notas, preguntas, intentos, imágenes y entregas vinculadas; la aplicación pide confirmación antes de hacerlo.
-- La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña no está disponible todavía.
+- La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña olvidada no está disponible todavía; requiere configurar un proveedor de correo y un flujo de restablecimiento con token de un solo uso.
 
 ## Construcción
 
