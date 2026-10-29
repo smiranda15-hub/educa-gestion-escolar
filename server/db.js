@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 const usePostgres = Boolean(process.env.DATABASE_URL)
 let pool
@@ -118,6 +119,10 @@ export async function migrate() {
       guardian_name TEXT NOT NULL,
       guardian_phone TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL CHECK (status IN ('Activo','Retirado')),
+      card_code TEXT,
+      photo_content_type TEXT,
+      photo_file_name TEXT,
+      photo_data ${usePostgres ? 'BYTEA' : 'BLOB'},
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, document)
     );
@@ -354,9 +359,32 @@ export async function migrate() {
       grade TEXT NOT NULL,
       academic_year TEXT NOT NULL,
       issued_by TEXT NOT NULL REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'Emitida',
+      rector_user_id TEXT REFERENCES users(id),
+      rector_name TEXT NOT NULL DEFAULT '',
+      signed_at TEXT,
+      replaced_by_id TEXT REFERENCES school_certificates(id) ON DELETE SET NULL,
+      annul_note TEXT NOT NULL DEFAULT '',
+      annulled_by TEXT REFERENCES users(id),
+      annulled_at TEXT,
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
     CREATE INDEX IF NOT EXISTS school_certificates_student_idx ON school_certificates(school_id, student_id, created_at);
+    CREATE TABLE IF NOT EXISTS school_certificate_requests (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      certificate_type TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      requested_by TEXT NOT NULL REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'Pendiente',
+      review_note TEXT NOT NULL DEFAULT '',
+      reviewed_by TEXT REFERENCES users(id),
+      reviewed_at TEXT,
+      replaces_certificate_id TEXT REFERENCES school_certificates(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS certificate_requests_school_idx ON school_certificate_requests(school_id, status, created_at);
     CREATE TABLE IF NOT EXISTS user_notifications (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
@@ -429,6 +457,12 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS academic_periods_school_year_idx ON academic_periods(school_id, academic_year, is_active);
   `)
   if (usePostgres) {
+    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BYTEA']]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
+    }
+    for (const [column, definition] of [['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificates' AND column_name = ?", column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
+    }
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_capacity'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_capacity INTEGER')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_deadline'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_deadline TEXT')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_events' AND column_name = 'registration_open'")) await db.exec('ALTER TABLE school_events ADD COLUMN registration_open INTEGER NOT NULL DEFAULT 0')
@@ -448,6 +482,14 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   } else {
+    const studentColumns = await db.all('PRAGMA table_info(students)')
+    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB']]) {
+      if (!studentColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
+    }
+    const certificateColumns = await db.all('PRAGMA table_info(school_certificates)')
+    for (const [column, definition] of [['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id)'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
+      if (!certificateColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
+    }
     const eventColumns = await db.all('PRAGMA table_info(school_events)')
     if (!eventColumns.some(column => column.name === 'registration_capacity')) await db.exec('ALTER TABLE school_events ADD COLUMN registration_capacity INTEGER')
     if (!eventColumns.some(column => column.name === 'registration_deadline')) await db.exec('ALTER TABLE school_events ADD COLUMN registration_deadline TEXT')
@@ -472,6 +514,7 @@ export async function migrate() {
     if (!assessmentColumns.some(column => column.name === 'is_published')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!assessmentColumns.some(column => column.name === 'external_form_url')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   }
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS students_card_code_idx ON students(card_code)')
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)
@@ -489,6 +532,12 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 15)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 16)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 17)
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 18)) {
+    const missingCodes = await db.all('SELECT id FROM students WHERE card_code IS NULL OR card_code = \'\'')
+    for (const student of missingCodes) await db.run('UPDATE students SET card_code = ? WHERE id = ?', randomUUID(), student.id)
+    await db.run("UPDATE school_certificates SET status = 'Anulada', annul_note = 'Documento anterior al proceso de aprobación rectoral' WHERE rector_name = '' AND status = 'Emitida'")
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 18)
+  }
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
