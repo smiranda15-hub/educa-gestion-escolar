@@ -206,6 +206,24 @@ export async function migrate() {
       PRIMARY KEY (assessment_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS student_grades_student_idx ON student_grades(student_id);
+    CREATE TABLE IF NOT EXISTS communications (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      course_id TEXT REFERENCES courses(id),
+      audience TEXT NOT NULL CHECK (audience IN ('school','course')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS communications_school_created_idx ON communications(school_id, created_at);
+    CREATE TABLE IF NOT EXISTS communication_recipients (
+      communication_id TEXT NOT NULL REFERENCES communications(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      read_at TEXT,
+      PRIMARY KEY (communication_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS communication_recipients_user_idx ON communication_recipients(user_id, read_at);
   `)
   if (usePostgres) {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'deleted_at'")) await db.exec('ALTER TABLE users ADD COLUMN deleted_at TEXT')
@@ -224,6 +242,7 @@ export async function migrate() {
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 6)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 7)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 8)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 9)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

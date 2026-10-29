@@ -178,6 +178,75 @@ async function route(request, response) {
     return json(response, 200, { date, activeStudents, courses, pendingEnrollments, attendance, weeklyAttendance })
   }
 
+  if (url.pathname === '/api/communications/options' && method === 'GET') {
+    const allowed = ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion']
+    if (!allowed.includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar destinatarios.' })
+    const courses = user.role === 'docente'
+      ? await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear" FROM courses c
+          JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND c.is_active = 1 AND ct.user_id = ?
+          GROUP BY c.id ORDER BY c.academic_year DESC, c.grade, c.name`, user.school_id, user.id)
+      : await db.all('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE school_id = ? AND is_active = 1 ORDER BY academic_year DESC, grade, name', user.school_id)
+    return json(response, 200, { courses })
+  }
+  if (url.pathname === '/api/communications' && method === 'GET') {
+    const allowed = ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante']
+    if (!allowed.includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar comunicaciones.' })
+    const communications = await db.all(`SELECT c.id, c.audience, c.title, c.body, c.created_at AS "createdAt",
+        c.created_by = ? AS "isAuthor", creator.full_name AS "authorName", co.name AS "courseName",
+        (SELECT COUNT(*) FROM communication_recipients r WHERE r.communication_id = c.id) AS "recipientCount",
+        (SELECT COUNT(*) FROM communication_recipients r WHERE r.communication_id = c.id AND r.read_at IS NOT NULL) AS "readCount",
+        mine.read_at AS "readAt"
+      FROM communications c JOIN users creator ON creator.id = c.created_by
+      LEFT JOIN courses co ON co.id = c.course_id
+      LEFT JOIN communication_recipients mine ON mine.communication_id = c.id AND mine.user_id = ?
+      WHERE c.school_id = ? AND (c.created_by = ? OR mine.user_id IS NOT NULL)
+      ORDER BY c.created_at DESC LIMIT 200`, user.id, user.id, user.school_id, user.id)
+    return json(response, 200, { communications })
+  }
+  if (url.pathname === '/api/communications' && method === 'POST') {
+    const broadRoles = ['admin', 'rectoria', 'coordinacion', 'secretaria', 'orientacion']
+    const allowed = [...broadRoles, 'docente']
+    if (!allowed.includes(user.role)) return json(response, 403, { error: 'No tienes permiso para enviar comunicaciones.' })
+    const body = await readBody(request)
+    const title = String(body.title || '').trim()
+    const content = String(body.body || '').trim()
+    const audience = String(body.audience || '')
+    const courseId = String(body.courseId || '')
+    if (title.length < 3 || title.length > 160 || content.length < 3 || content.length > 5000) return json(response, 400, { error: 'El asunto debe tener entre 3 y 160 caracteres y el mensaje entre 3 y 5000.' })
+    if (!['school', 'course'].includes(audience) || (audience === 'school' && !broadRoles.includes(user.role)) || (audience === 'course' && !courseId)) return json(response, 400, { error: 'Selecciona un grupo válido para esta comunicación.' })
+    let course = null
+    if (audience === 'course') {
+      course = await db.get('SELECT id, grade, name FROM courses WHERE id = ? AND school_id = ? AND is_active = 1', courseId, user.school_id)
+      if (!course) return json(response, 404, { error: 'El curso seleccionado no está disponible.' })
+      if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', course.id, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
+    }
+    const recipients = audience === 'school'
+      ? await db.all('SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL', user.school_id)
+      : await db.all(`SELECT DISTINCT u.id FROM users u
+          LEFT JOIN user_students us ON us.user_id = u.id
+          LEFT JOIN students s ON s.id = us.student_id AND s.school_id = ? AND s.status = 'Activo'
+          LEFT JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = ? AND se.course_id = ? AND se.status = 'Activa'
+          LEFT JOIN course_teachers ct ON ct.user_id = u.id AND ct.course_id = ?
+          WHERE u.school_id = ? AND u.is_active = 1 AND u.deleted_at IS NULL
+            AND ((s.id IS NOT NULL AND (s.grade = ? OR se.id IS NOT NULL)) OR ct.user_id IS NOT NULL)`,
+          user.school_id, user.school_id, course.id, course.id, user.school_id, course.grade)
+    const recipientUsers = recipients.filter(recipient => recipient.id !== user.id)
+    if (!recipientUsers.length) return json(response, 409, { error: 'No hay otras cuentas activas asociadas a los destinatarios seleccionados.' })
+    const id = randomUUID()
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO communications (id, school_id, course_id, audience, title, body, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)', id, user.school_id, audience === 'course' ? course.id : null, audience, title, content, user.id)
+      for (const recipient of recipientUsers) await tx.run('INSERT INTO communication_recipients (communication_id, user_id) VALUES (?, ?)', id, recipient.id)
+    })
+    await logAudit(user.school_id, user.id, `communication_created:${audience}`)
+    return json(response, 201, { created: true, id, recipientCount: recipientUsers.length })
+  }
+  const communicationReadMatch = url.pathname.match(/^\/api\/communications\/([0-9a-f-]{36})\/read$/i)
+  if (communicationReadMatch && method === 'PATCH') {
+    const result = await db.run('UPDATE communication_recipients SET read_at = CURRENT_TIMESTAMP WHERE communication_id = ? AND user_id = ? AND communication_id IN (SELECT id FROM communications WHERE school_id = ?)', communicationReadMatch[1], user.id, user.school_id)
+    if (!result.rowCount && !result.changes) return json(response, 404, { error: 'No encontramos esta comunicación en tu bandeja.' })
+    return json(response, 200, { read: true })
+  }
+
   if (url.pathname === '/api/users' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede consultar las cuentas del colegio.' })
     const users = await db.all(`SELECT id, email, full_name AS name, role, is_active AS active, created_at AS "createdAt"
