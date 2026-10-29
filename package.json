@@ -17,6 +17,7 @@
     "@capacitor/android": "^8.6.0",
     "@capacitor/core": "^8.6.0",
     "@vitejs/plugin-react": "latest",
+    "bootstrap": "^5.3.8",
     "lucide-react": "^0.468.0",
     "pg": "^8.23.1",
     "qrcode.react": "^4.2.0",
