@@ -1302,18 +1302,20 @@ async function route(request, response) {
         latest.id AS "submissionId", latest.original_file_name AS "fileName", latest.uploaded_at AS "uploadedAt",
         latest.submission_no AS "submissionNo", online_attempt.submitted_at AS "onlineSubmittedAt",
         online_attempt.score AS "onlineScore",
+        sg.score AS "score",
         (SELECT COUNT(*) FROM work_submissions ws WHERE ws.assessment_id = ? AND ws.student_id = st.id) AS attempts
       FROM students st JOIN courses assessment_course ON assessment_course.id = ? AND assessment_course.school_id = st.school_id
       LEFT JOIN work_submissions latest ON latest.id = (SELECT ws.id FROM work_submissions ws
         WHERE ws.assessment_id = ? AND ws.student_id = st.id ORDER BY ws.submission_no DESC LIMIT 1)
       LEFT JOIN online_assessment_attempts online_attempt ON online_attempt.assessment_id = ? AND online_attempt.student_id = st.id
+      LEFT JOIN student_grades sg ON sg.assessment_id = ? AND sg.student_id = st.id
       WHERE st.school_id = ? AND st.status = 'Activo' AND (
         EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
           AND se.course_id = assessment_course.id AND se.academic_year = assessment_course.academic_year AND se.status = 'Activa')
         OR (st.grade = assessment_course.grade AND NOT EXISTS (SELECT 1 FROM student_enrollments se
           WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))
-      ) ORDER BY st.full_name`, assessment.id, assessment.courseId, assessment.id, assessment.id, user.school_id)
-    return json(response, 200, { submissions: submissions.map(row => ({ ...row, attempts: Number(row.attempts), onlineScore: row.onlineScore === null ? null : Number(row.onlineScore) })) })
+      ) ORDER BY st.full_name`, assessment.id, assessment.courseId, assessment.id, assessment.id, assessment.id, user.school_id)
+    return json(response, 200, { submissions: submissions.map(row => ({ ...row, attempts: Number(row.attempts), onlineScore: row.onlineScore === null ? null : Number(row.onlineScore), score: row.score === null ? null : Number(row.score) })) })
   }
   const submissionFileMatch = url.pathname.match(/^\/api\/grades\/submissions\/([0-9a-f-]{36})\/file$/i)
   if (submissionFileMatch && method === 'GET') {
