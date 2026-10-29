@@ -137,10 +137,23 @@ export async function migrate() {
       PRIMARY KEY (course_id, user_id, subject)
     );
     CREATE INDEX IF NOT EXISTS course_teachers_user_idx ON course_teachers(user_id);
+    CREATE TABLE IF NOT EXISTS attendance_records (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      course_id TEXT NOT NULL REFERENCES courses(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      attendance_date TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('Presente','Ausente','Tarde','Justificado')),
+      marked_by TEXT NOT NULL REFERENCES users(id),
+      marked_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (course_id, student_id, attendance_date)
+    );
+    CREATE INDEX IF NOT EXISTS attendance_school_date_idx ON attendance_records(school_id, attendance_date);
   `)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 4)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {
