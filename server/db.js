@@ -277,6 +277,16 @@ export async function migrate() {
       UNIQUE (school_id, academic_year, period)
     );
     CREATE INDEX IF NOT EXISTS grade_period_publications_scope_idx ON grade_period_publications(school_id, academic_year, is_published);
+    CREATE TABLE IF NOT EXISTS report_card_verifications (
+      token TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      academic_year TEXT NOT NULL,
+      period TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (student_id, academic_year, period)
+    );
+    CREATE INDEX IF NOT EXISTS report_card_verifications_scope_idx ON report_card_verifications(school_id, academic_year, period);
     CREATE TABLE IF NOT EXISTS work_submissions (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -378,6 +388,7 @@ export async function migrate() {
       school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
       student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
       certificate_number TEXT NOT NULL UNIQUE,
+      verification_code TEXT UNIQUE,
       certificate_type TEXT NOT NULL,
       student_name TEXT NOT NULL,
       grade TEXT NOT NULL,
@@ -490,7 +501,7 @@ export async function migrate() {
     for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BYTEA']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
-    for (const [column, definition] of [['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
+    for (const [column, definition] of [['verification_code', 'TEXT'], ['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificates' AND column_name = ?", column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
     }
     for (const [column, definition] of [['contact_phone', "TEXT NOT NULL DEFAULT ''"], ['profile_photo_content_type', 'TEXT'], ['profile_photo_file_name', 'TEXT'], ['profile_photo_data', 'BYTEA']]) {
@@ -528,7 +539,7 @@ export async function migrate() {
       if (!studentColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     const certificateColumns = await db.all('PRAGMA table_info(school_certificates)')
-    for (const [column, definition] of [['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id)'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
+    for (const [column, definition] of [['verification_code', 'TEXT'], ['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id)'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
       if (!certificateColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
     }
     const eventColumns = await db.all('PRAGMA table_info(school_events)')
@@ -584,6 +595,9 @@ export async function migrate() {
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 19)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 20)
+  const unverifiedCertificates = await db.all("SELECT id FROM school_certificates WHERE verification_code IS NULL OR verification_code = ''")
+  for (const certificate of unverifiedCertificates) await db.run('UPDATE school_certificates SET verification_code = ? WHERE id = ?', randomUUID(), certificate.id)
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS school_certificates_verification_code_idx ON school_certificates(verification_code)')
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

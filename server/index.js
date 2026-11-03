@@ -119,6 +119,29 @@ async function route(request, response) {
   if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
+  const publicVerificationMatch = url.pathname.match(/^\/api\/public\/verification\/(constancia|boletin)\/([0-9a-f-]{36})$/i)
+  if (method === 'GET' && publicVerificationMatch) {
+    const [, kind, token] = publicVerificationMatch
+    if (kind.toLowerCase() === 'constancia') {
+      const record = await db.get(`SELECT d.status, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
+        d.student_name AS "studentName", d.academic_year AS "academicYear", d.rector_name AS "rectorName", d.signed_at AS "signedAt",
+        s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+        FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.verification_code = ?`, token)
+      if (!record) return json(response, 404, { valid: false, status: 'Código no encontrado.' })
+      const valid = record.status === 'Emitida' && Boolean(record.signedAt && record.rectorName)
+      return json(response, 200, { valid, status: valid ? 'Documento vigente y firmado' : record.status === 'Anulada' ? 'Documento anulado' : record.status === 'Reemplazada' ? 'Documento reemplazado' : 'Documento no vigente', documentKind: 'Constancia', ...record, hasLogo: Boolean(record.hasLogo) })
+    }
+    const record = await db.get(`SELECT rv.academic_year AS "academicYear", rv.period, p.is_published AS "isPublished",
+        p.published_at AS "publishedAt", st.full_name AS "studentName", st.grade,
+        s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+        FROM report_card_verifications rv JOIN schools s ON s.id = rv.school_id
+        JOIN students st ON st.id = rv.student_id
+        LEFT JOIN grade_period_publications p ON p.school_id = rv.school_id AND p.academic_year = rv.academic_year AND p.period = rv.period
+        WHERE rv.token = ?`, token)
+    if (!record) return json(response, 404, { valid: false, status: 'Código no encontrado.' })
+    const valid = Boolean(record.isPublished)
+    return json(response, 200, { valid, status: valid ? 'Boletín publicado y vigente' : 'Boletín retirado o no publicado', documentKind: 'Boletín académico', ...record, hasLogo: Boolean(record.hasLogo) })
+  }
   if (method === 'GET' && url.pathname === '/api/auth/setup-status') {
     const count = Number((await db.get('SELECT COUNT(*) AS count FROM users')).count)
     return json(response, 200, { setupRequired: count === 0 })
@@ -1247,8 +1270,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
     const certificate = await db.get(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
       d.student_id AS "studentId", d.student_name AS "studentName", d.grade, d.academic_year AS "academicYear", d.created_at AS "issuedAt",
-      d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.status,
-      s.name AS "schoolName", s.address, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone"
+      d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.status, d.verification_code AS "verificationCode",
+      s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo", s.address, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone"
       FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.id = ? AND d.school_id = ? AND d.status = 'Emitida'`, certificateMatch[1], user.school_id)
     if (!certificate) return json(response, 404, { error: 'No encontramos esa constancia.' })
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, certificate.studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
@@ -1312,10 +1335,10 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
             // when no separate student_enrollments row exists for that year.
             const prior = current.replaces_certificate_id ? await tx.get("SELECT id FROM school_certificates WHERE id = ? AND school_id = ? AND status = 'Emitida'", current.replaces_certificate_id, user.school_id) : null
             if (current.replaces_certificate_id && !prior) throw Object.assign(new Error('La constancia que se quería corregir ya no está vigente.'), { status: 409 })
-            const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`
+            const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`, verificationCode = randomUUID()
             certificateId = randomUUID()
-            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, certificate_number, certificate_type, student_name, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, certificateNumber, current.certificate_type, student.name, student.grade, current.academic_year, user.id, user.id, user.name, issuedAt)
+            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, certificate_number, verification_code, certificate_type, student_name, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, certificateNumber, verificationCode, current.certificate_type, student.name, student.grade, current.academic_year, user.id, user.id, user.full_name, issuedAt)
             if (prior) await tx.run("UPDATE school_certificates SET status = 'Reemplazada', replaced_by_id = ? WHERE id = ? AND school_id = ?", certificateId, prior.id, user.school_id)
             issuedCertificate = { id: certificateId, certificateNumber }
           }
@@ -1880,8 +1903,12 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         assessments: summary.assessments,
       }
     })
+    await db.run(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING`, randomUUID(), user.school_id, student.id, academicYear, period)
+    const verification = await db.get('SELECT token FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+    const reportSchool = await db.get('SELECT name, slug, address, contact_email AS "contactEmail", contact_phone AS "contactPhone", primary_color AS "primaryColor", logo_content_type AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student, academicYear, period, subjects, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
+    return json(response, 200, { student, academicYear, period, subjects, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
