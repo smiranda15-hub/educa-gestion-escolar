@@ -115,6 +115,15 @@ export async function migrate() {
       action TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
+    CREATE TABLE IF NOT EXISTS legal_acceptances (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      document_key TEXT NOT NULL,
+      document_version TEXT NOT NULL,
+      accepted_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (school_id, user_id, document_key, document_version)
+    );
     CREATE TABLE IF NOT EXISTS students (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),

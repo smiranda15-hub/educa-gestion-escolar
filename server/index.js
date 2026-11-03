@@ -187,6 +187,7 @@ const getSession = async request => {
 }
 const sessionCookie = (token, maxAge) => `educa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie}`
 const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug, primaryColor: user.school_primary_color || '#6c70df', hasLogo: Boolean(user.school_logo_content_type) } })
+const legalTermsVersion = '2026-11-03-v1'
 
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
@@ -402,6 +403,33 @@ async function route(request, response) {
   if (method === 'GET' && url.pathname === '/api/auth/me') {
     const user = await getSession(request)
     return user ? json(response, 200, { user: safeUser(user) }) : json(response, 401, { error: 'Sesión no válida.' }, { 'Set-Cookie': sessionCookie('', 0) })
+  }
+  if (method === 'GET' && url.pathname === '/api/legal/provider') {
+    return json(response, 200, { provider: {
+      name: process.env.EDUCA_PROVIDER_NAME?.trim() || '',
+      nit: process.env.EDUCA_PROVIDER_NIT?.trim() || '',
+      address: process.env.EDUCA_PROVIDER_ADDRESS?.trim() || '',
+      email: process.env.EDUCA_PRIVACY_EMAIL?.trim() || '',
+      phone: process.env.EDUCA_PRIVACY_PHONE?.trim() || '',
+    } })
+  }
+  if (method === 'GET' && url.pathname === '/api/legal/terms-status') {
+    const user = await getSession(request)
+    if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+    const accepted = await db.get('SELECT 1 FROM legal_acceptances WHERE school_id = ? AND user_id = ? AND document_key = ? AND document_version = ?', user.school_id, user.id, 'terms', legalTermsVersion)
+    return json(response, 200, { accepted: Boolean(accepted), version: legalTermsVersion })
+  }
+  if (method === 'POST' && url.pathname === '/api/legal/terms-acceptance') {
+    const user = await getSession(request)
+    if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+    const body = await readBody(request)
+    if (body.version !== legalTermsVersion) return json(response, 409, { error: 'Los términos cambiaron. Recarga la página y vuelve a revisarlos.' })
+    const acceptanceId = randomUUID()
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO legal_acceptances (id, school_id, user_id, document_key, document_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT (school_id, user_id, document_key, document_version) DO NOTHING', acceptanceId, user.school_id, user.id, 'terms', legalTermsVersion)
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', user.school_id, user.id, `terms_accepted:${legalTermsVersion}`)
+    })
+    return json(response, 200, { accepted: true, version: legalTermsVersion })
   }
   if (method === 'POST' && url.pathname === '/api/auth/logout') {
     const token = cookieToken(request)
