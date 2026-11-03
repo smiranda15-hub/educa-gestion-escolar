@@ -211,6 +211,7 @@ export async function migrate() {
       academic_year TEXT NOT NULL,
       guardian_name TEXT NOT NULL,
       guardian_phone TEXT NOT NULL DEFAULT '',
+      guardian_email TEXT NOT NULL DEFAULT '',
       pending_documents TEXT NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL CHECK (status IN ('Solicitada','En revisión','Pendiente documentos','Aprobada','Rechazada')),
@@ -808,6 +809,13 @@ export async function migrate() {
       CREATE INDEX IF NOT EXISTS password_reset_requests_user_idx ON password_reset_requests(school_id, user_id, status);
     `)
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 23)
+  }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 24)) {
+    const exists = usePostgres
+      ? await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'enrollment_requests' AND column_name = 'guardian_email'")
+      : (await db.all('PRAGMA table_info(enrollment_requests)')).some(item => item.name === 'guardian_email')
+    if (!exists) await db.exec("ALTER TABLE enrollment_requests ADD COLUMN guardian_email TEXT NOT NULL DEFAULT ''")
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 24)
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)

@@ -107,7 +107,7 @@ function getEmailTransport() {
   return emailTransportPromise
 }
 const escapeEmailHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
-async function sendEmail({ to, bcc, subject, text }) {
+async function sendEmail({ to, bcc, subject, text, institutionName = '' }) {
   const recipients = [...new Set([...(Array.isArray(to) ? to : [to]), ...(Array.isArray(bcc) ? bcc : [bcc])].filter(Boolean).map(value => String(value).trim()).filter(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) ]
   if (!recipients.length) return { sent: 0, configured: isEmailConfigured() }
   const resendApiKey = String(process.env.RESEND_API_KEY || '').trim()
@@ -118,7 +118,7 @@ async function sendEmail({ to, bcc, subject, text }) {
       for (let offset = 0; offset < recipients.length; offset += 40) {
         const batch = recipients.slice(offset, offset + 40)
         const payload = {
-          from: resendFrom,
+          from: institutionSender(resendFrom, institutionName),
           to: [batch[0]],
           ...(batch.length > 1 ? { bcc: batch.slice(1) } : {}),
           subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 180),
@@ -150,7 +150,7 @@ async function sendEmail({ to, bcc, subject, text }) {
     return { sent: 0, configured: true, failed: true }
   }
   if (!transport) return { sent: 0, configured: false }
-  const from = String(process.env.SMTP_FROM || process.env.SMTP_USER).trim()
+  const from = institutionSender(String(process.env.SMTP_FROM || process.env.SMTP_USER).trim(), institutionName)
   const replyTo = String(process.env.SMTP_REPLY_TO || '').trim()
   let sent = 0
   try {
@@ -169,6 +169,22 @@ async function sendEmail({ to, bcc, subject, text }) {
     return { sent, configured: true, failed: true }
   }
 }
+function institutionSender(configuredFrom, institutionName) {
+  const name = String(institutionName || '').replace(/[\r\n<>\"]+/g, ' ').trim().slice(0, 100)
+  if (!name) return configuredFrom
+  const address = configuredFrom.match(/<([^<>]+)>/)?.[1] || configuredFrom
+  const displayName = `${name} · EDUCA`.replaceAll('"', '')
+  return `"${displayName}" <${address}>`
+}
+async function sendInstitutionEmail(schoolId, { to, bcc, subject, text }) {
+  const school = await db.get('SELECT name FROM schools WHERE id = ?', schoolId)
+  const institutionName = String(school?.name || 'Institución educativa').trim()
+  return sendEmail({
+    to, bcc, institutionName,
+    subject: `[${institutionName}] ${subject}`,
+    text: `Institución emisora: ${institutionName}\nPlataforma: EDUCA\n\n${text}`,
+  })
+}
 async function sendEmailToUsers(schoolId, recipientIds, subject, text) {
   const ids = [...new Set((recipientIds || []).filter(Boolean))]
   if (!ids.length) return { sent: 0, configured: isEmailConfigured() }
@@ -177,7 +193,7 @@ async function sendEmailToUsers(schoolId, recipientIds, subject, text) {
     const batch = ids.slice(offset, offset + 500)
     recipients.push(...await db.all(`SELECT email FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id IN (${batch.map(() => '?').join(',')})`, schoolId, ...batch))
   }
-  return sendEmail({ bcc: recipients.map(item => item.email), subject, text })
+  return sendInstitutionEmail(schoolId, { bcc: recipients.map(item => item.email), subject, text })
 }
 async function getPushMessaging() {
   const encodedCredentials = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
@@ -352,8 +368,8 @@ async function route(request, response) {
       })
       await sendPushNotifications(account.schoolId, reviewerIds, 'Solicitud de recuperación de contraseña', 'Hay una solicitud pendiente en el panel de soporte.', 'password_reset', id)
       const reviewerEmails = await db.all(`SELECT email FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria') AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
-      await sendEmail({ bcc: reviewerEmails.map(item => item.email), subject: 'EDUCA: solicitud de recuperación de contraseña', text: `Hay una solicitud de recuperación pendiente para ${account.fullName} (${account.role}).\nIngresa a EDUCA y revisa el módulo Solicitudes de contraseña. No compartas códigos por otros canales.` })
-      await sendEmail({ to: email, subject: 'EDUCA: recibimos tu solicitud de recuperación', text: `Hola ${account.fullName},\nRecibimos tu solicitud para recuperar el acceso a EDUCA. Rectoría o administración debe revisarla. Si la aprueba, recibirás en este correo un enlace seguro para crear una nueva contraseña.\n\nEl enlace vence en 30 minutos y solo se puede usar una vez. Si no solicitaste este cambio, contacta a tu institución. No compartas enlaces ni códigos.` })
+      await sendInstitutionEmail(account.schoolId, { bcc: reviewerEmails.map(item => item.email), subject: 'Solicitud de recuperación de contraseña', text: `Hay una solicitud de recuperación pendiente para ${account.fullName} (${account.role}).\nIngresa a EDUCA y revisa el módulo Solicitudes de contraseña. No compartas códigos por otros canales.` })
+      await sendInstitutionEmail(account.schoolId, { to: email, subject: 'Recibimos tu solicitud de recuperación', text: `Hola ${account.fullName},\nRecibimos tu solicitud para recuperar el acceso a EDUCA. Rectoría o administración debe revisarla. Si la aprueba, recibirás en este correo un enlace seguro para crear una nueva contraseña.\n\nEl enlace vence en 30 minutos y solo se puede usar una vez. Si no solicitaste este cambio, contacta a tu institución. No compartas enlaces ni códigos.` })
     }
     return json(response, 200, { message: genericMessage })
   }
@@ -381,7 +397,7 @@ async function route(request, response) {
         completed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ? AND status = 'Aprobada'`, requestRecord.id, school.id)
       await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', school.id, requestRecord.userId, 'password_reset_completed')
     })
-    await sendEmail({ to: requestRecord.email, subject: 'EDUCA: contraseña actualizada', text: `Hola ${requestRecord.fullName},\nLa contraseña de tu cuenta de EDUCA fue actualizada correctamente.\n\nSi no realizaste este cambio, contacta de inmediato a rectoría o administración de tu colegio.` })
+    await sendInstitutionEmail(school.id, { to: requestRecord.email, subject: 'Contraseña actualizada', text: `Hola ${requestRecord.fullName},\nLa contraseña de tu cuenta de EDUCA fue actualizada correctamente.\n\nSi no realizaste este cambio, contacta de inmediato a rectoría o administración de tu colegio.` })
     return json(response, 200, { message: 'La contraseña se actualizó. Ya puedes iniciar sesión.' })
   }
   const publicSchoolLogo = url.pathname.match(/^\/api\/schools\/([a-z0-9-]{1,48})\/logo$/i)
@@ -638,7 +654,7 @@ async function route(request, response) {
       if (requestRecord.status !== 'Pendiente') return json(response, 409, { error: 'Solo se pueden rechazar solicitudes pendientes.' })
       await db.run(`UPDATE password_reset_requests SET status = 'Rechazada', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, user.id, note, requestRecord.id, user.school_id)
       await logAudit(user.school_id, user.id, 'password_reset_request_rejected')
-      await sendEmail({ to: requestRecord.email, subject: 'EDUCA: actualización de tu solicitud de acceso', text: `Hola ${requestRecord.fullName},\nLa solicitud para restablecer tu contraseña no fue aprobada. Contacta a rectoría o administración de tu institución para confirmar tu identidad y recibir ayuda.` })
+      await sendInstitutionEmail(user.school_id, { to: requestRecord.email, subject: 'Actualización de tu solicitud de acceso', text: `Hola ${requestRecord.fullName},\nLa solicitud para restablecer tu contraseña no fue aprobada. Contacta a rectoría o administración de tu institución para confirmar tu identidad y recibir ayuda.` })
       return json(response, 200, { updated: true, status: 'Rechazada' })
     }
     if (action !== 'approve' && action !== 'renew') return json(response, 400, { error: 'Acción de solicitud no válida.' })
@@ -655,7 +671,7 @@ async function route(request, response) {
     const resetPage = String(process.env.EDUCA_PUBLIC_URL || '').trim().replace(/\/+$/, '')
     const resetParams = new URLSearchParams({ school: target.schoolSlug, email: target.email, token: resetCode })
     const resetLink = resetPage ? `${resetPage}/#restablecer?${resetParams.toString()}` : ''
-    await sendEmail({ to: target.email, subject: 'EDUCA: enlace para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Usa este enlace seguro para crear una nueva contraseña:\n${resetLink || 'Solicita a rectoría o administración el enlace de recuperación de EDUCA.'}\n\nEl enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, contacta al colegio. No compartas el enlace.` })
+    await sendInstitutionEmail(user.school_id, { to: target.email, subject: 'Enlace para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Usa este enlace seguro para crear una nueva contraseña:\n${resetLink || 'Solicita a rectoría o administración el enlace de recuperación de EDUCA.'}\n\nEl enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, contacta al colegio. No compartas el enlace.` })
     return json(response, 200, { updated: true, status: 'Aprobada', resetCode, expiresAt })
   }
 
@@ -1204,6 +1220,8 @@ async function route(request, response) {
     const reviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','coordinacion','secretaria')", user.school_id)
     for (const reviewer of reviewers) await db.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, reviewer.id, 'Nueva justificación de ausencia', `${linked.name} · ${date}`, 'attendance')
     await sendPushNotifications(user.school_id, reviewers.map(item => item.id), 'Nueva justificación de ausencia', 'Hay una solicitud pendiente para revisar en EDUCA.', 'attendance')
+    await sendEmailToUsers(user.school_id, reviewers.map(item => item.id), 'Nueva justificación pendiente', `El acudiente ${user.full_name} envió una justificación para ${linked.name}.\nFecha de ausencia: ${date}.\nIngresa a EDUCA para revisar el motivo y el soporte adjunto.`)
+    await sendEmailToUsers(user.school_id, [user.id], 'Recibimos tu justificación', `La justificación para ${linked.name} del ${date} quedó registrada y pendiente de revisión.\nTe enviaremos otro correo cuando rectoría o administración actualice su estado.`)
     await logAudit(user.school_id, user.id, 'attendance_justification_created')
     return json(response, 201, { id })
   }
@@ -1226,7 +1244,9 @@ async function route(request, response) {
     if (!['admin', 'rectoria', 'coordinacion', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo coordinación y administración pueden revisar justificaciones.' })
     const body = await readBody(request), status = String(body.status || ''), note = String(body.note || '').trim()
     if (!['Aprobada', 'Rechazada'].includes(status) || note.length > 500 || (status === 'Rechazada' && note.length < 3)) return json(response, 400, { error: 'Selecciona aprobación o rechazo; el rechazo requiere una nota de 3 a 500 caracteres.' })
-    const item = await db.get('SELECT id, student_id AS "studentId", attendance_date AS date, created_by AS "createdBy" FROM attendance_justifications WHERE id = ? AND school_id = ?', justificationMatch[1], user.school_id)
+    const item = await db.get(`SELECT j.id, j.student_id AS "studentId", st.full_name AS "studentName", j.attendance_date AS date,
+      j.created_by AS "createdBy" FROM attendance_justifications j JOIN students st ON st.id = j.student_id
+      WHERE j.id = ? AND j.school_id = ?`, justificationMatch[1], user.school_id)
     if (!item) return json(response, 404, { error: 'No encontramos esa justificación.' })
     await db.transaction(async tx => {
       await tx.run('UPDATE attendance_justifications SET status = ?, reviewer_note = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', status, note, user.id, item.id, user.school_id)
@@ -1234,6 +1254,7 @@ async function route(request, response) {
       await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, item.createdBy, `Justificación ${status.toLocaleLowerCase('es')}`, `${item.date}${note ? ` · ${note}` : ''}`, 'attendance')
     })
     await sendPushNotifications(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar la respuesta.', 'attendance')
+    await sendEmailToUsers(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, `La justificación de ${item.studentName} para el ${item.date} fue ${status.toLocaleLowerCase('es')}.${note ? `\nObservación: ${note}` : ''}\nIngresa a EDUCA para consultar el registro completo.`)
     await logAudit(user.school_id, user.id, 'attendance_justification_reviewed')
     return json(response, 200, { updated: true })
   }
@@ -1752,6 +1773,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, user.school_id, studentId, academicRecord?.enrollmentId || null, academicRecord?.courseId || null, gradeSnapshot, courseNameSnapshot, academicRecord?.status || 'Registro actual', type, academicYear, user.id, user.role, replacesId || null)
     for (const rector of rectors) await db.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, rector.id, 'Solicitud de constancia pendiente', `${student.name} · ${type}`, 'certificate')
     await sendPushNotifications(user.school_id, rectors.map(item => item.id), 'Solicitud de constancia pendiente', 'Hay un documento escolar pendiente para revisión en EDUCA.', 'certificate', id)
+    await sendEmailToUsers(user.school_id, rectors.map(item => item.id), 'Solicitud de documento escolar pendiente', `Hay una solicitud de ${type} para ${student.name}.\nGrado: ${gradeSnapshot}${courseNameSnapshot ? ` · ${courseNameSnapshot}` : ''}. Año lectivo: ${academicYear}.\nIngresa a EDUCA para revisar y aprobar o rechazar la solicitud.`)
+    await sendEmailToUsers(user.school_id, [user.id], 'Recibimos tu solicitud de documento', `Tu solicitud de ${type} para ${student.name} quedó registrada y pendiente de revisión por rectoría.\nGrado: ${gradeSnapshot}${courseNameSnapshot ? ` · ${courseNameSnapshot}` : ''} · Año lectivo: ${academicYear}.`)
     await logAudit(user.school_id, user.id, 'certificate_request_created')
     return json(response, 201, { request: { id, studentId, certificateType: type, academicYear, grade: gradeSnapshot, courseName: courseNameSnapshot, status: 'Pendiente' } })
   }
@@ -1814,6 +1837,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         })
       } catch (error) { if (error.status) return json(response, error.status, { error: error.message }); throw error }
       await sendPushNotifications(user.school_id, [requestRow.requested_by], `Solicitud ${decision.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar el resultado.', 'certificate', issuedCertificate?.id || id)
+      const reviewedStudent = await db.get('SELECT full_name AS name FROM students WHERE id = ? AND school_id = ?', requestRow.student_id, user.school_id)
+      await sendEmailToUsers(user.school_id, [requestRow.requested_by], `${requestRow.certificate_type}: solicitud ${decision.toLocaleLowerCase('es')}`, `La solicitud para ${reviewedStudent?.name || 'el estudiante'} fue ${decision.toLocaleLowerCase('es')} por rectoría.\nGrado: ${requestRow.grade_snapshot || 'No especificado'} · Año lectivo: ${requestRow.academic_year}.${issuedCertificate?.certificateNumber ? `\nFolio del documento: ${issuedCertificate.certificateNumber}.` : ''}${note ? `\nObservación: ${note}` : ''}\nIngresa a EDUCA para consultar el estado y el documento.`)
       await logAudit(user.school_id, user.id, `certificate_request_${decision === 'Aprobada' ? 'approved' : 'rejected'}`)
       return json(response, 200, { status: decision, certificateId: issuedCertificate?.id })
     }
@@ -1834,6 +1859,11 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const gradeSnapshot = academicRecord?.grade || requestRow.grade_snapshot || (await db.get('SELECT grade FROM students WHERE id = ?', requestRow.student_id))?.grade || ''
     await db.run(`UPDATE school_certificate_requests SET certificate_type = ?, academic_year = ?, enrollment_id = ?, course_id = ?, grade_snapshot = ?, course_name_snapshot = ?, academic_status_snapshot = ? WHERE id = ? AND school_id = ? AND status = ?`, type, academicYear, academicRecord?.enrollmentId || null, academicRecord?.courseId || null, gradeSnapshot, academicRecord?.courseName || '', academicRecord?.status || 'Registro académico', id, user.school_id, 'Pendiente')
     await logAudit(user.school_id, user.id, 'certificate_request_updated')
+    const studentName = (await db.get('SELECT full_name AS name FROM students WHERE id = ? AND school_id = ?', requestRow.student_id, user.school_id))?.name || 'el estudiante'
+    const notificationRecipients = user.id === requestRow.requested_by
+      ? (await db.all("SELECT id FROM users WHERE school_id = ? AND role = 'rectoria' AND is_active = 1 AND deleted_at IS NULL", user.school_id)).map(item => item.id)
+      : [requestRow.requested_by]
+    await sendEmailToUsers(user.school_id, notificationRecipients, 'Solicitud de documento actualizada', `La solicitud de ${type} para ${studentName} fue modificada.\nGrado: ${gradeSnapshot}${academicRecord?.courseName ? ` · ${academicRecord.courseName}` : ''} · Año lectivo: ${academicYear}.\nIngresa a EDUCA para revisar los datos actualizados.`)
     return json(response, 200, { id, status: 'Pendiente', certificateType: type, academicYear })
   }
   if (certRequestMatch && method === 'DELETE') {
@@ -1843,22 +1873,31 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (['admin', 'rectoria'].includes(user.role)) {
       await db.run("UPDATE school_certificate_requests SET status = 'Eliminada', review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND school_id = ?", `Eliminada por ${user.full_name}`, user.id, new Date().toISOString(), certRequestMatch[1], user.school_id)
       await logAudit(user.school_id, user.id, 'certificate_request_deleted')
+      await sendEmailToUsers(user.school_id, [row.requested_by], 'Solicitud de documento eliminada', 'Rectoría o administración eliminó una solicitud de constancia o certificado. Ingresa a EDUCA o contacta a la institución si necesitas más información.')
       return json(response, 200, { status: 'Eliminada' })
     }
     if (row.requested_by !== user.id) return json(response, 403, { error: 'Solo quien solicitó o rectoría puede cancelar esta solicitud.' })
     if (row.status !== 'Pendiente') return json(response, 409, { error: 'Solo se pueden cancelar solicitudes pendientes.' })
     await db.run("UPDATE school_certificate_requests SET status = 'Cancelada' WHERE id = ? AND school_id = ?", certRequestMatch[1], user.school_id)
     await logAudit(user.school_id, user.id, 'certificate_request_cancelled')
+    const reviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND role = 'rectoria' AND is_active = 1 AND deleted_at IS NULL", user.school_id)
+    await sendEmailToUsers(user.school_id, reviewers.map(item => item.id), 'Solicitud de documento cancelada', 'El acudiente canceló una solicitud pendiente de constancia o certificado. Ingresa a EDUCA para consultar el registro.')
     return json(response, 200, { status: 'Cancelada' })
   }
   if (certificateMatch && method === 'DELETE') {
     if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden anular constancias emitidas.' })
     const body = await readBody(request), reason = String(body.reason || '').trim()
     if (reason.length < 3 || reason.length > 500) return json(response, 400, { error: 'Indica el motivo de anulación.' })
+    const certificate = await db.get(`SELECT student_id AS "studentId", student_name AS "studentName", certificate_type AS "certificateType",
+      document_number AS "documentNumber", academic_year AS "academicYear", issued_by AS "issuedBy"
+      FROM school_certificates WHERE id = ? AND school_id = ? AND status = 'Emitida'`, certificateMatch[1], user.school_id)
+    if (!certificate) return json(response, 404, { error: 'No encontramos una constancia vigente para anular.' })
     const result = await db.run("UPDATE school_certificates SET status = 'Anulada', annul_note = ?, annulled_by = ?, annulled_at = ? WHERE id = ? AND school_id = ? AND status = 'Emitida'", reason, user.id, new Date().toISOString(), certificateMatch[1], user.school_id)
     if (!result.changes && !result.rowCount) return json(response, 404, { error: 'No encontramos una constancia vigente para anular.' })
     await db.run("UPDATE document_control_registry SET status = 'Anulada' WHERE school_id = ? AND document_type = 'CERT' AND reference_id = ?", user.school_id, certificateMatch[1])
     await logAudit(user.school_id, user.id, 'school_certificate_annulled')
+    const linkedAccounts = await db.all('SELECT user_id AS id FROM user_students WHERE student_id = ?', certificate.studentId)
+    await sendEmailToUsers(user.school_id, [...linkedAccounts.map(item => item.id), certificate.issuedBy].filter(id => id && id !== user.id), 'Documento escolar anulado', `El documento ${certificate.documentNumber} (${certificate.certificateType}) de ${certificate.studentName}, año lectivo ${certificate.academicYear}, fue anulado por rectoría o administración.\nMotivo: ${reason}\nEl documento ya no está vigente. Si necesitas información, contacta a la institución.`)
     return json(response, 200, { status: 'Anulada' })
   }
   if (url.pathname.startsWith('/api/institutional-staff') && !institutionalManagerRoles.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar personal y firmas institucionales.' })
@@ -2812,7 +2851,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const status = String(url.searchParams.get('status') || 'Todos')
     const requests = await db.all(`SELECT id, student_id AS "studentId", student_name AS "studentName", document, document_number AS "documentNumber",
       grade_requested AS "gradeRequested", academic_year AS "academicYear", guardian_name AS "guardianName",
-      guardian_phone AS "guardianPhone", pending_documents AS "pendingDocuments", notes, status,
+      guardian_phone AS "guardianPhone", guardian_email AS "guardianEmail", pending_documents AS "pendingDocuments", notes, status,
       created_at AS "createdAt", updated_at AS "updatedAt"
       FROM enrollment_requests WHERE school_id = ? AND (? = 'Todos' OR status = ?)
       AND (student_name LIKE ? OR document LIKE ? OR grade_requested LIKE ?) ORDER BY created_at DESC LIMIT 500`,
@@ -2828,10 +2867,11 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const academicYear = academicYearStart(body.academicYear)
     const guardianName = String(body.guardianName || '').trim()
     const guardianPhone = String(body.guardianPhone || '').trim()
+    const guardianEmail = String(body.guardianEmail || '').trim().toLowerCase()
     const pendingDocuments = (Array.isArray(body.pendingDocuments) ? body.pendingDocuments : String(body.pendingDocuments || '').split(','))
       .map(item => String(item).trim()).filter(Boolean).slice(0, 20).join('\n')
     const notes = String(body.notes || '').trim()
-    if (studentName.length < 2 || studentName.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(document) || gradeRequested.length < 2 || gradeRequested.length > 40 || !academicYear || guardianName.length < 2 || guardianName.length > 100 || guardianPhone.length > 25 || pendingDocuments.length > 1000 || notes.length > 1000) return json(response, 400, { error: 'Revisa el estudiante, acudiente, grado y año lectivo (AAAA).' })
+    if (studentName.length < 2 || studentName.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(document) || gradeRequested.length < 2 || gradeRequested.length > 40 || !academicYear || guardianName.length < 2 || guardianName.length > 100 || guardianPhone.length > 25 || guardianEmail.length > 254 || guardianEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail) || pendingDocuments.length > 1000 || notes.length > 1000) return json(response, 400, { error: 'Revisa el estudiante, acudiente, correo, grado y año lectivo (AAAA).' })
     const duplicate = await db.get(`SELECT id FROM enrollment_requests WHERE school_id = ? AND document = ? AND LEFT(academic_year, 4) = ?
       AND status IN ('Solicitada','En revisión','Pendiente documentos','Aprobada')`, user.school_id, document, academicYear)
     if (duplicate) return json(response, 409, { error: 'Ya existe una solicitud en curso para ese documento y año lectivo.' })
@@ -2839,12 +2879,15 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const documentNumber = await db.transaction(async tx => {
       const controlledNumber = await nextDocumentNumber(tx, user.school_id, 'SOLMAT', academicYear)
       await tx.run(`INSERT INTO enrollment_requests (id, school_id, student_name, document, document_number, grade_requested, academic_year,
-        guardian_name, guardian_phone, pending_documents, notes, status, created_by, updated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Solicitada', ?, ?)`, id, user.school_id, studentName, document, controlledNumber, gradeRequested, academicYear, guardianName, guardianPhone, pendingDocuments, notes, user.id, user.id)
+        guardian_name, guardian_phone, guardian_email, pending_documents, notes, status, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Solicitada', ?, ?)`, id, user.school_id, studentName, document, controlledNumber, gradeRequested, academicYear, guardianName, guardianPhone, guardianEmail, pendingDocuments, notes, user.id, user.id)
       await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'SOLMAT', documentNumber: controlledNumber, referenceId: id, studentName, academicYear, status: 'Solicitada', createdBy: user.id })
       return controlledNumber
     })
     await logAudit(user.school_id, user.id, 'enrollment_request_created')
+    const enrollmentReviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','secretaria')", user.school_id)
+    await sendEmailToUsers(user.school_id, enrollmentReviewers.map(item => item.id), 'Nueva solicitud de matrícula', `Se registró la solicitud ${documentNumber} para ${studentName}.\nGrado solicitado: ${gradeRequested} · Año lectivo: ${academicYear}.\nAcudiente: ${guardianName}${guardianPhone ? ` · ${guardianPhone}` : ''}.\nIngresa a EDUCA para revisar documentos y actualizar el estado.`)
+    if (guardianEmail) await sendInstitutionEmail(user.school_id, { to: guardianEmail, subject: 'Solicitud de matrícula recibida', text: `Hola ${guardianName},\nRecibimos la solicitud de matrícula de ${studentName} para el grado ${gradeRequested}, año lectivo ${academicYear}.\nNúmero de radicado: ${documentNumber}. La institución te notificará cuando cambie el estado.` })
     return json(response, 201, { id, documentNumber, status: 'Solicitada' })
   }
   const enrollmentRequestMatch = url.pathname.match(/^\/api\/enrollments\/([0-9a-f-]{36})$/i)
@@ -2866,6 +2909,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         WHERE id = ? AND school_id = ?`, status, pendingDocuments, notes, user.id, new Date().toISOString(), id, user.school_id)
       await db.run('UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = \'SOLMAT\' AND reference_id = ?', status, user.school_id, id)
       await logAudit(user.school_id, user.id, 'enrollment_request_updated')
+      await sendEmailToUsers(user.school_id, [requestRecord.created_by], `Solicitud de matrícula ${status.toLocaleLowerCase('es')}`, `La solicitud ${requestRecord.document_number} de ${requestRecord.student_name} fue actualizada a: ${status}.\nGrado solicitado: ${requestRecord.grade_requested} · Año lectivo: ${requestRecord.academic_year}.${pendingDocuments ? `\nDocumentos pendientes: ${pendingDocuments.replaceAll('\n', ', ')}.` : ''}${notes ? `\nObservación: ${notes}` : ''}\nIngresa a EDUCA para consultar el registro.`)
+      if (requestRecord.guardian_email) await sendInstitutionEmail(user.school_id, { to: requestRecord.guardian_email, subject: `Actualización de matrícula: ${status}`, text: `Hola ${requestRecord.guardian_name},\nLa solicitud ${requestRecord.document_number} de ${requestRecord.student_name} cambió a estado: ${status}.\nGrado: ${requestRecord.grade_requested} · Año lectivo: ${requestRecord.academic_year}.${pendingDocuments ? `\nDocumentos pendientes: ${pendingDocuments.replaceAll('\n', ', ')}.` : ''}${notes ? `\nObservación: ${notes}` : ''}\nContacta a la institución si tienes preguntas.` })
       return json(response, 200, { id, status })
     }
     const course = await db.get(`SELECT id, academic_year AS "academicYear" FROM courses WHERE school_id = ? AND grade = ? AND LEFT(academic_year, 4) = ? AND is_active = 1`, user.school_id, requestRecord.grade_requested, academicYearStart(requestRecord.academic_year))
@@ -2890,6 +2935,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       return controlledNumber
     })
     await logAudit(user.school_id, user.id, 'enrollment_approved')
+    const linkedAccounts = await db.all('SELECT user_id AS id FROM user_students WHERE student_id = ? AND user_id <> ?', studentId, requestRecord.created_by)
+    await sendEmailToUsers(user.school_id, [requestRecord.created_by, ...linkedAccounts.map(item => item.id)], 'Matrícula aprobada', `La matrícula de ${requestRecord.student_name} fue aprobada.\nCurso asignado: ${requestRecord.grade_requested} · Año lectivo: ${course.academicYear}.\nNúmero de control: ${enrollmentDocumentNumber}.\nIngresa a EDUCA para consultar el historial y los documentos.`)
+    if (requestRecord.guardian_email) await sendInstitutionEmail(user.school_id, { to: requestRecord.guardian_email, subject: 'Matrícula aprobada', text: `Hola ${requestRecord.guardian_name},\nLa matrícula de ${requestRecord.student_name} fue aprobada.\nGrado: ${requestRecord.grade_requested} · Año lectivo: ${course.academicYear}.\nNúmero de control: ${enrollmentDocumentNumber}.` })
     return json(response, 200, { id, studentId, enrollmentId, documentNumber: enrollmentDocumentNumber, status: 'Aprobada' })
   }
   if (url.pathname === '/api/enrollments/history' && method === 'GET') {
@@ -2930,6 +2978,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       return controlledNumber
     })
     await logAudit(user.school_id, user.id, 'student_transferred')
+    const studentName = (await db.get('SELECT full_name AS name FROM students WHERE id = ? AND school_id = ?', current.studentId, user.school_id))?.name || 'El estudiante'
+    const linkedAccounts = await db.all('SELECT user_id AS id FROM user_students WHERE student_id = ?', current.studentId)
+    await sendEmailToUsers(user.school_id, linkedAccounts.map(item => item.id), 'Cambio de curso o sede', `${studentName} fue trasladado a otro curso dentro del año lectivo ${current.academicYear}.\nNuevo grado: ${destination.grade}.\nIngresa a EDUCA para consultar la trayectoria académica actualizada.`)
     return json(response, 200, { enrollmentId: newEnrollmentId, documentNumber, transferred: true })
   }
 
