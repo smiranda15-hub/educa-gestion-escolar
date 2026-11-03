@@ -12,6 +12,9 @@ const sessionTtl = 8 * 60 * 60 * 1000
 const institutionManagerEmail = 'smiranda15@uan.edu.co'
 const loginAttempts = new Map()
 const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
+const institutionalManagerRoles = ['admin', 'rectoria']
+const signerPositions = new Set(['rector', 'academic_coordinator', 'coexistence_coordinator', 'teacher', 'group_director', 'academic_secretary', 'administrative', 'other'])
+const documentSignatureTypes = new Set(['report_card', 'study_certificate', 'academic_certificate', 'academic_report', 'other'])
 const stateChangingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const configuredOrigins = new Set((process.env.EDUCA_ALLOWED_ORIGINS || '').split(',').map(value => {
   try { return new URL(value.trim()).origin } catch { return '' }
@@ -67,6 +70,38 @@ const parseStudentPhoto = value => {
   const data = Buffer.from(value.data.slice(value.data.indexOf(',') + 1), 'base64')
   if (!data.length || data.length > 2 * 1024 * 1024 || !type.magic(data)) return null
   return { contentType: type.mime, fileName, data }
+}
+const parseInstitutionalSignature = value => {
+  if (!value || typeof value !== 'object' || typeof value.data !== 'string') return null
+  const fileName = basename(String(value.fileName || 'firma.png')).slice(0, 120)
+  if (extname(fileName).toLowerCase() !== '.png' || !/^data:image\/png;base64,/.test(value.data)) return null
+  const data = Buffer.from(value.data.slice(value.data.indexOf(',') + 1), 'base64')
+  if (data.length < 16 || data.length > 512 * 1024 || data.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return null
+  return { fileName, contentType: 'image/png', data }
+}
+const defaultSignatureRules = {
+  report_card: ['group_director', 'rector'], study_certificate: ['rector', 'academic_secretary'],
+  academic_certificate: ['rector', 'academic_coordinator'], academic_report: ['group_director', 'academic_coordinator'], other: ['other', '']
+}
+async function resolveDocumentSigners(schoolId, documentType, courseId = null) {
+  const defaults = defaultSignatureRules[documentType] || defaultSignatureRules.other
+  const rule = await db.get('SELECT primary_position AS "primaryPosition", secondary_position AS "secondaryPosition", primary_staff_id AS "primaryStaffId", secondary_staff_id AS "secondaryStaffId" FROM document_signature_rules WHERE school_id = ? AND document_type = ?', schoolId, documentType)
+  const selections = rule || { primaryPosition: defaults[0], secondaryPosition: defaults[1], primaryStaffId: null, secondaryStaffId: null }
+  const resolveOne = async (positionKey, staffId) => {
+    if (!positionKey) return null
+    let staff = staffId ? await db.get('SELECT id, full_name AS "fullName", position_title AS "positionTitle", signature_data AS "signatureData" FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1', staffId, schoolId) : null
+    if (!staff && positionKey === 'group_director' && courseId) staff = await db.get(`SELECT st.id, st.full_name AS "fullName", st.position_title AS "positionTitle", st.signature_data AS "signatureData"
+      FROM course_group_directors d JOIN institutional_staff st ON st.id = d.staff_id WHERE d.course_id = ? AND d.school_id = ? AND st.is_active = 1`, courseId, schoolId)
+    if (!staff) staff = await db.get('SELECT id, full_name AS "fullName", position_title AS "positionTitle", signature_data AS "signatureData" FROM institutional_staff WHERE school_id = ? AND position_key = ? AND is_active = 1 ORDER BY created_at, full_name LIMIT 1', schoolId, positionKey)
+    if (!staff) return null
+    return { id: staff.id, fullName: staff.fullName, positionTitle: staff.positionTitle, signature: staff.signatureData ? `data:image/png;base64,${Buffer.from(staff.signatureData).toString('base64')}` : null }
+  }
+  const signatures = []
+  const primary = await resolveOne(selections.primaryPosition, selections.primaryStaffId)
+  const secondary = await resolveOne(selections.secondaryPosition, selections.secondaryStaffId)
+  if (primary) signatures.push(primary)
+  if (secondary && secondary.id !== primary?.id) signatures.push(secondary)
+  return signatures
 }
 const validGoogleFormsUrl = value => {
   if (!value) return true
@@ -400,7 +435,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/audit-log' && method === 'GET') {
-    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar la bitácora.' })
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden consultar la bitácora del colegio.' })
     const action = String(url.searchParams.get('action') || '').trim().slice(0, 100).toLowerCase()
     const from = String(url.searchParams.get('from') || '')
     const to = String(url.searchParams.get('to') || '')
@@ -425,7 +460,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/audit-log/export' && method === 'GET') {
-    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede exportar la bitácora.' })
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden exportar la bitácora del colegio.' })
     const action = String(url.searchParams.get('action') || '').trim().slice(0, 100).toLowerCase()
     const from = String(url.searchParams.get('from') || '')
     const to = String(url.searchParams.get('to') || '')
@@ -503,7 +538,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/dashboard' && method === 'GET') {
-    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede consultar este panel.' })
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden consultar este panel.' })
     const date = String(url.searchParams.get('date') || '')
     if (!validDate(date)) return json(response, 400, { error: 'La fecha del panel no es válida.' })
     const activeStudents = Number((await db.get("SELECT COUNT(*) AS count FROM students WHERE school_id = ? AND status = 'Activo'", user.school_id)).count)
@@ -712,7 +747,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/schedule/options' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede configurar el horario.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede configurar el horario.' })
     const assignments = await db.all(`SELECT c.id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear",
       ct.user_id AS "teacherId", u.full_name AS "teacherName", ct.subject
       FROM courses c JOIN course_teachers ct ON ct.course_id = c.id JOIN users u ON u.id = ct.user_id
@@ -736,7 +771,7 @@ async function route(request, response) {
     return json(response, 200, { schedule: await db.all(sql, ...params) })
   }
   if (url.pathname === '/api/schedule' && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
     const body = await readBody(request)
     const courseId = String(body.courseId || ''), teacherId = String(body.teacherId || ''), subject = String(body.subject || '').trim()
     const weekday = Number(body.weekday), startTime = String(body.startTime || ''), endTime = String(body.endTime || ''), room = String(body.room || '').trim()
@@ -754,7 +789,7 @@ async function route(request, response) {
   }
   const scheduleDeleteMatch = url.pathname.match(/^\/api\/schedule\/([0-9a-f-]{36})$/i)
   if (scheduleDeleteMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración puede editar el horario.' })
     await db.run('DELETE FROM class_schedule_slots WHERE id = ? AND school_id = ?', scheduleDeleteMatch[1], user.school_id)
     await logAudit(user.school_id, user.id, 'schedule_slot_deleted')
     return json(response, 200, { deleted: true })
@@ -764,7 +799,7 @@ async function route(request, response) {
     return json(response, 200, { periods: await db.all('SELECT id, academic_year AS "academicYear", name, start_date AS "startDate", end_date AS "endDate", is_active AS "active" FROM academic_periods WHERE school_id = ? ORDER BY academic_year DESC, start_date', user.school_id) })
   }
   if (url.pathname === '/api/academic-periods' && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
     const body = await readBody(request)
     const year = String(body.academicYear || ''), name = String(body.name || '').trim(), startDate = String(body.startDate || ''), endDate = String(body.endDate || '')
     if (!/^\d{4}-\d{4}$/.test(year) || name.length < 2 || name.length > 40 || !validDate(startDate) || !validDate(endDate) || endDate < startDate) return json(response, 400, { error: 'Revisa el año lectivo, nombre y fechas del periodo.' })
@@ -776,7 +811,7 @@ async function route(request, response) {
   }
   const periodMatch = url.pathname.match(/^\/api\/academic-periods\/([0-9a-f-]{36})$/i)
   if (periodMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden configurar periodos.' })
     await db.run('DELETE FROM academic_periods WHERE id = ? AND school_id = ?', periodMatch[1], user.school_id)
     await logAudit(user.school_id, user.id, 'academic_period_deleted')
     return json(response, 200, { deleted: true })
@@ -919,7 +954,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/students/import' && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden importar estudiantes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden importar estudiantes.' })
     const body = await readBody(request), rows = body.records
     if (!Array.isArray(rows) || !rows.length || rows.length > 1000) return json(response, 400, { error: 'El archivo debe contener entre 1 y 1.000 estudiantes.' })
     const clean = rows.map((row, index) => ({ rowNo: index + 2, name: String(row.name || '').trim(), document: String(row.document || '').trim(), grade: String(row.grade || '').trim(), guardian: String(row.guardian || '').trim(), phone: String(row.phone || '').trim(), status: row.status === 'Retirado' ? 'Retirado' : 'Activo' }))
@@ -1015,7 +1050,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/reports/options' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar estos filtros.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar estos filtros.' })
     const courses = user.role === 'docente'
       ? await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear" FROM courses c
           JOIN course_teachers ct ON ct.course_id = c.id WHERE c.school_id = ? AND ct.user_id = ?
@@ -1026,9 +1061,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   if (url.pathname === '/api/reports' && method === 'GET') {
     const type = String(url.searchParams.get('type') || '')
     const allowedRoles = {
-      students: ['admin', 'secretaria', 'docente'],
-      attendance: ['admin', 'secretaria', 'docente'],
-      grades: ['admin', 'secretaria', 'docente'],
+      students: ['admin', 'rectoria', 'secretaria', 'docente'],
+      attendance: ['admin', 'rectoria', 'secretaria', 'docente'],
+      grades: ['admin', 'rectoria', 'secretaria', 'docente'],
       enrollments: ['admin', 'secretaria'],
       guardians: ['admin', 'secretaria'],
     }
@@ -1270,17 +1305,19 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
     const certificate = await db.get(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
       d.student_id AS "studentId", d.student_name AS "studentName", d.grade, d.academic_year AS "academicYear", d.created_at AS "issuedAt",
-      d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.status, d.verification_code AS "verificationCode",
+      d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.status, d.verification_code AS "verificationCode", d.signature_snapshot AS "signatureSnapshot",
       s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo", s.address, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone"
       FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.id = ? AND d.school_id = ? AND d.status = 'Emitida'`, certificateMatch[1], user.school_id)
     if (!certificate) return json(response, 404, { error: 'No encontramos esa constancia.' })
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, certificate.studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
-    return json(response, 200, { certificate })
+    let signatures = []
+    try { signatures = JSON.parse(certificate.signatureSnapshot || '[]') } catch {}
+    return json(response, 200, { certificate: { ...certificate, signatures } })
   }
   if (url.pathname === '/api/certificates' && method === 'POST') {
     if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para emitir constancias.' })
     const body = await readBody(request), studentId = String(body.studentId || ''), type = String(body.certificateType || ''), academicYearInput = String(body.academicYear || '').trim(), replacesId = String(body.replacesCertificateId || '')
-    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !['Constancia de estudio', 'Constancia de matrícula'].includes(type) || academicYearInput && !/^\d{4}(?:-\d{4})?$/.test(academicYearInput) || replacesId && !/^[0-9a-f-]{36}$/i.test(replacesId)) return json(response, 400, { error: 'Revisa el estudiante, tipo de constancia y año lectivo.' })
+    if (!/^[0-9a-f-]{36}$/i.test(studentId) || !['Constancia de estudio', 'Constancia de matrícula', 'Certificado académico'].includes(type) || academicYearInput && !/^\d{4}(?:-\d{4})?$/.test(academicYearInput) || replacesId && !/^[0-9a-f-]{36}$/i.test(replacesId)) return json(response, 400, { error: 'Revisa el estudiante, tipo de documento y año lectivo.' })
     const student = await db.get("SELECT st.id, st.full_name AS name, st.grade, st.status, st.school_id AS schoolId FROM students st WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo'", studentId, user.school_id)
     if (!student) return json(response, 404, { error: 'No encontramos un estudiante activo en este colegio.' })
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
@@ -1336,9 +1373,12 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
             const prior = current.replaces_certificate_id ? await tx.get("SELECT id FROM school_certificates WHERE id = ? AND school_id = ? AND status = 'Emitida'", current.replaces_certificate_id, user.school_id) : null
             if (current.replaces_certificate_id && !prior) throw Object.assign(new Error('La constancia que se quería corregir ya no está vigente.'), { status: 409 })
             const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`, verificationCode = randomUUID()
+            const signatureSnapshot = await resolveDocumentSigners(user.school_id, current.certificate_type === 'Certificado académico' ? 'academic_certificate' : 'study_certificate')
+            if (!signatureSnapshot.length) signatureSnapshot.push({ fullName: user.full_name, positionTitle: 'Rector(a)', signature: null })
+            const rectorName = signatureSnapshot[0]?.fullName || user.full_name
             certificateId = randomUUID()
-            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, certificate_number, verification_code, certificate_type, student_name, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, certificateNumber, verificationCode, current.certificate_type, student.name, student.grade, current.academic_year, user.id, user.id, user.full_name, issuedAt)
+            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, certificate_number, verification_code, signature_snapshot, certificate_type, student_name, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, certificateNumber, verificationCode, JSON.stringify(signatureSnapshot), current.certificate_type, student.name, student.grade, current.academic_year, user.id, user.id, rectorName, issuedAt)
             if (prior) await tx.run("UPDATE school_certificates SET status = 'Reemplazada', replaced_by_id = ? WHERE id = ? AND school_id = ?", certificateId, prior.id, user.school_id)
             issuedCertificate = { id: certificateId, certificateNumber }
           }
@@ -1353,7 +1393,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!['admin', 'rectoria'].includes(user.role) && requestRow.requested_by !== user.id) return json(response, 403, { error: 'Solo quien solicitó o rectoría puede editar una solicitud.' })
     if (requestRow.status !== 'Pendiente') return json(response, 409, { error: 'Solo se pueden editar solicitudes pendientes.' })
     const type = String(body.certificateType || requestRow.certificate_type), academicYear = String(body.academicYear || requestRow.academic_year)
-    if (!['Constancia de estudio', 'Constancia de matrícula'].includes(type) || !/^\d{4}(?:-\d{4})?$/.test(academicYear)) return json(response, 400, { error: 'Revisa el tipo de constancia y año lectivo.' })
+    if (!['Constancia de estudio', 'Constancia de matrícula', 'Certificado académico'].includes(type) || !/^\d{4}(?:-\d{4})?$/.test(academicYear)) return json(response, 400, { error: 'Revisa el tipo de documento y año lectivo.' })
     await db.run('UPDATE school_certificate_requests SET certificate_type = ?, academic_year = ? WHERE id = ? AND school_id = ? AND status = ?', type, academicYear, id, user.school_id, 'Pendiente')
     await logAudit(user.school_id, user.id, 'certificate_request_updated')
     return json(response, 200, { id, status: 'Pendiente', certificateType: type, academicYear })
@@ -1376,14 +1416,101 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     await logAudit(user.school_id, user.id, 'school_certificate_annulled')
     return json(response, 200, { status: 'Anulada' })
   }
+  if (url.pathname.startsWith('/api/institutional-staff') && !institutionalManagerRoles.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar personal y firmas institucionales.' })
+  if (url.pathname === '/api/institutional-staff' && method === 'GET') {
+    const staff = await db.all(`SELECT id, user_id AS "userId", full_name AS "fullName", national_id AS "nationalId", position_key AS "positionKey", position_title AS "positionTitle", email, phone, department, signature_file_name AS "signatureFileName", (signature_data IS NOT NULL) AS "hasSignature", is_active AS "isActive"
+      FROM institutional_staff WHERE school_id = ? ORDER BY is_active DESC, position_title, full_name`, user.school_id)
+    for (const item of staff) item.courses = (await db.all('SELECT course_id AS "courseId" FROM institutional_staff_courses WHERE staff_id = ?', item.id)).map(row => row.courseId)
+    const courses = await db.all('SELECT id, name, grade, academic_year AS "academicYear", is_active AS "isActive" FROM courses WHERE school_id = ? ORDER BY academic_year DESC, grade, name', user.school_id)
+    const directors = await db.all('SELECT course_id AS "courseId", staff_id AS "staffId" FROM course_group_directors WHERE school_id = ?', user.school_id)
+    const rules = await db.all(`SELECT document_type AS "documentType", primary_position AS "primaryPosition", secondary_position AS "secondaryPosition", primary_staff_id AS "primaryStaffId", secondary_staff_id AS "secondaryStaffId"
+      FROM document_signature_rules WHERE school_id = ? ORDER BY document_type`, user.school_id)
+    return json(response, 200, { staff: staff.map(item => ({ ...item, isActive: Boolean(item.isActive), hasSignature: Boolean(item.hasSignature) })), courses: courses.map(item => ({ ...item, isActive: Boolean(item.isActive) })), directors, rules })
+  }
+  const institutionalStaffMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})$/i)
+  if ((url.pathname === '/api/institutional-staff' && method === 'POST') || (institutionalStaffMatch && method === 'PUT')) {
+    const body = await readLargeJsonBody(request, 900 * 1024)
+    const fullName = String(body.fullName || '').trim(), nationalId = String(body.nationalId || '').trim().slice(0, 40), positionKey = String(body.positionKey || ''), positionTitle = String(body.positionTitle || '').trim().slice(0, 80)
+    const email = String(body.email || '').trim().toLowerCase().slice(0, 254), phone = String(body.phone || '').trim().slice(0, 40), department = String(body.department || '').trim().slice(0, 100)
+    const courseIds = Array.isArray(body.courseIds) ? [...new Set(body.courseIds.map(String))].slice(0, 100) : []
+    const userId = body.userId ? String(body.userId) : null
+    const signature = body.removeSignature ? null : parseInstitutionalSignature(body.signature)
+    if (fullName.length < 3 || fullName.length > 120 || nationalId.length < 4 || !signerPositions.has(positionKey) || positionTitle.length < 2 || email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(response, 400, { error: 'Revisa nombre, identificación, cargo y correo del funcionario.' })
+    if (body.signature && !body.removeSignature && !signature) return json(response, 400, { error: 'La firma debe ser un archivo PNG válido de hasta 512 KB.' })
+    if (userId && !await db.get('SELECT id FROM users WHERE id = ? AND school_id = ? AND deleted_at IS NULL', userId, user.school_id)) return json(response, 400, { error: 'La cuenta vinculada debe pertenecer a esta institución.' })
+    if (courseIds.length && Number((await db.get(`SELECT COUNT(*) AS count FROM courses WHERE school_id = ? AND id IN (${courseIds.map(() => '?').join(',')})`, user.school_id, ...courseIds)).count) !== courseIds.length) return json(response, 400, { error: 'Uno o más cursos no pertenecen a esta institución.' })
+    const current = method === 'PUT' ? await db.get('SELECT id FROM institutional_staff WHERE id = ? AND school_id = ?', institutionalStaffMatch[1], user.school_id) : null
+    if (method === 'PUT' && !current) return json(response, 404, { error: 'No encontramos ese funcionario en esta institución.' })
+    const id = current?.id || randomUUID()
+    const signatureFields = signature ? [signature.contentType, signature.fileName, signature.data] : null
+    try {
+      await db.transaction(async tx => {
+        if (current) {
+          const clearSignature = body.removeSignature ? ', signature_content_type = NULL, signature_file_name = NULL, signature_data = NULL' : ''
+          const setSignature = signature ? ', signature_content_type = ?, signature_file_name = ?, signature_data = ?' : ''
+          await tx.run(`UPDATE institutional_staff SET user_id = ?, full_name = ?, national_id = ?, position_key = ?, position_title = ?, email = ?, phone = ?, department = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP${clearSignature}${setSignature} WHERE id = ? AND school_id = ?`, userId, fullName, nationalId, positionKey, positionTitle, email, phone, department, user.id, ...(signatureFields || []), id, user.school_id)
+          await tx.run('DELETE FROM institutional_staff_courses WHERE staff_id = ?', id)
+        } else {
+          await tx.run('INSERT INTO institutional_staff (id, school_id, user_id, full_name, national_id, position_key, position_title, email, phone, department, signature_content_type, signature_file_name, signature_data, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, userId, fullName, nationalId, positionKey, positionTitle, email, phone, department, signatureFields?.[0] || null, signatureFields?.[1] || null, signatureFields?.[2] || null, user.id, user.id)
+        }
+        for (const courseId of courseIds) await tx.run('INSERT INTO institutional_staff_courses (staff_id, course_id) VALUES (?, ?)', id, courseId)
+      })
+    } catch (error) {
+      if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya existe un funcionario con esa identificación en esta institución.' })
+      throw error
+    }
+    await logAudit(user.school_id, user.id, current ? 'institutional_staff_updated' : 'institutional_staff_created')
+    return json(response, current ? 200 : 201, { id })
+  }
+  const groupDirectorMatch = url.pathname.match(/^\/api\/institutional-staff\/courses\/([0-9a-f-]{36})\/director$/i)
+  if (groupDirectorMatch && method === 'PUT') {
+    const body = await readBody(request), staffId = String(body.staffId || '')
+    const course = await db.get('SELECT id FROM courses WHERE id = ? AND school_id = ?', groupDirectorMatch[1], user.school_id)
+    if (!course) return json(response, 404, { error: 'No encontramos el curso en esta institución.' })
+    if (!staffId) {
+      await db.run('DELETE FROM course_group_directors WHERE course_id = ? AND school_id = ?', course.id, user.school_id)
+      await logAudit(user.school_id, user.id, 'course_group_director_removed')
+      return json(response, 200, { saved: true, staffId: null })
+    }
+    if (!await db.get('SELECT id FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1', staffId, user.school_id)) return json(response, 400, { error: 'Selecciona un funcionario activo del colegio.' })
+    await db.run(`INSERT INTO course_group_directors (course_id, school_id, staff_id, assigned_by, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(course_id) DO UPDATE SET staff_id = excluded.staff_id, assigned_by = excluded.assigned_by, updated_at = CURRENT_TIMESTAMP`, course.id, user.school_id, staffId, user.id)
+    await logAudit(user.school_id, user.id, 'course_group_director_assigned')
+    return json(response, 200, { saved: true, staffId })
+  }
+  if (institutionalStaffMatch && method === 'PATCH') {
+    const body = await readBody(request)
+    if (typeof body.active !== 'boolean') return json(response, 400, { error: 'Indica si el funcionario debe quedar activo.' })
+    const result = await db.run('UPDATE institutional_staff SET is_active = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', body.active ? 1 : 0, user.id, institutionalStaffMatch[1], user.school_id)
+    if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos ese funcionario en esta institución.' })
+    await logAudit(user.school_id, user.id, body.active ? 'institutional_staff_activated' : 'institutional_staff_deactivated')
+    return json(response, 200, { active: body.active })
+  }
+  const staffSignatureMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})\/signature$/i)
+  if (staffSignatureMatch && method === 'GET') {
+    const staff = await db.get('SELECT signature_data AS data, signature_content_type AS "contentType" FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1', staffSignatureMatch[1], user.school_id)
+    if (!staff?.data || staff.contentType !== 'image/png') return json(response, 404, { error: 'No hay firma activa disponible.' })
+    response.writeHead(200, { 'Content-Type': staff.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+    return response.end(staff.data)
+  }
+  if (url.pathname === '/api/institutional-staff/signature-rules' && method === 'PUT') {
+    const body = await readBody(request), documentType = String(body.documentType || ''), primaryPosition = String(body.primaryPosition || ''), secondaryPosition = String(body.secondaryPosition || '')
+    const primaryStaffId = body.primaryStaffId || null, secondaryStaffId = body.secondaryStaffId || null
+    if (!documentSignatureTypes.has(documentType) || !signerPositions.has(primaryPosition) || secondaryPosition && !signerPositions.has(secondaryPosition)) return json(response, 400, { error: 'Revisa el tipo de documento y sus firmantes.' })
+    for (const staffId of [primaryStaffId, secondaryStaffId].filter(Boolean)) if (!await db.get('SELECT id FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1', staffId, user.school_id)) return json(response, 400, { error: 'El firmante debe ser personal activo de esta institución.' })
+    await db.run(`INSERT INTO document_signature_rules (school_id, document_type, primary_position, secondary_position, primary_staff_id, secondary_staff_id, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(school_id, document_type) DO UPDATE SET primary_position = excluded.primary_position, secondary_position = excluded.secondary_position, primary_staff_id = excluded.primary_staff_id, secondary_staff_id = excluded.secondary_staff_id, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`, user.school_id, documentType, primaryPosition, secondaryPosition, primaryStaffId, secondaryStaffId, user.id)
+    await logAudit(user.school_id, user.id, 'document_signature_rule_updated')
+    return json(response, 200, { saved: true })
+  }
   if (url.pathname === '/api/teachers' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar docentes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar docentes.' })
     const teachers = await db.all("SELECT id, full_name AS name FROM users WHERE school_id = ? AND role = 'docente' AND is_active = 1 AND deleted_at IS NULL ORDER BY full_name", user.school_id)
     return json(response, 200, { teachers })
   }
 
   if (url.pathname === '/api/courses' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar los cursos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar los cursos.' })
     const courses = await db.all(`SELECT c.id, c.name, c.grade, c.academic_year AS "academicYear", c.is_active AS "isActive",
       COUNT(DISTINCT ct.user_id) AS "teacherCount"
       FROM courses c LEFT JOIN course_teachers ct ON ct.course_id = c.id
@@ -1393,7 +1520,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { courses: mapped })
   }
   if (url.pathname === '/api/courses' && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear cursos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear cursos.' })
     const body = await readBody(request)
     const name = String(body.name || '').trim()
     const grade = String(body.grade || '').trim()
@@ -1418,7 +1545,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const courseRecordMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})$/i)
   if (courseRecordMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar cursos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar cursos.' })
     const id = courseRecordMatch[1]
     const current = await db.get('SELECT id, name, grade, academic_year AS "academicYear" FROM courses WHERE id = ? AND school_id = ?', id, user.school_id)
     if (!current) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
@@ -1434,7 +1561,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { course: { ...current, name, grade, academicYear } })
   }
   if (courseRecordMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para dar de baja cursos.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para dar de baja cursos.' })
     const result = await db.run('UPDATE courses SET is_active = 0 WHERE id = ? AND school_id = ? AND is_active = 1', courseRecordMatch[1], user.school_id)
     if ((result.rowCount ?? result.changes) === 0) return json(response, 404, { error: 'No encontramos un curso activo con ese identificador.' })
     await logAudit(user.school_id, user.id, 'course_archived')
@@ -1442,7 +1569,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const courseStatusMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/status$/i)
   if (courseStatusMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar el estado del curso.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar el estado del curso.' })
     const body = await readBody(request)
     if (typeof body.active !== 'boolean') return json(response, 400, { error: 'Indica si el curso debe quedar activo.' })
     const result = await db.run('UPDATE courses SET is_active = ? WHERE id = ? AND school_id = ?', body.active ? 1 : 0, courseStatusMatch[1], user.school_id)
@@ -1452,7 +1579,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const courseHistoryMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/history$/i)
   if (courseHistoryMatch && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar el historial del curso.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar el historial del curso.' })
     const course = await db.get('SELECT id, name, grade, academic_year AS "academicYear", is_active AS "isActive" FROM courses WHERE id = ? AND school_id = ?', courseHistoryMatch[1], user.school_id)
     if (!course) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
     const kind = String(url.searchParams.get('kind') || '')
@@ -1483,7 +1610,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const courseTeacherMatch = url.pathname.match(/^\/api\/courses\/([0-9a-f-]{36})\/teachers$/i)
   if (courseTeacherMatch && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para asignar docentes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para asignar docentes.' })
     const body = await readBody(request)
     const teacherId = String(body.teacherId || '')
     const subject = String(body.subject || '').trim()
@@ -1497,7 +1624,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 201, { assigned: true })
   }
   if (courseTeacherMatch && method === 'PUT') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar asignaciones docentes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar asignaciones docentes.' })
     const body = await readBody(request)
     const originalTeacherId = String(body.originalTeacherId || '')
     const originalSubject = String(body.originalSubject || '').trim()
@@ -1514,7 +1641,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { updated: true })
   }
   if (courseTeacherMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para quitar asignaciones docentes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para quitar asignaciones docentes.' })
     const body = await readBody(request)
     const teacherId = String(body.teacherId || '')
     const subject = String(body.subject || '').trim()
@@ -1543,7 +1670,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/attendance' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar asistencia.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar asistencia.' })
     const courseId = String(url.searchParams.get('courseId') || '')
     const attendanceDate = String(url.searchParams.get('date') || '')
     if (!validDate(attendanceDate)) return json(response, 400, { error: 'Selecciona una fecha válida.' })
@@ -1559,7 +1686,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { course, date: attendanceDate, students })
   }
   if (url.pathname === '/api/attendance' && method === 'POST') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar asistencia.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar asistencia.' })
     const body = await readBody(request)
     const courseId = String(body.courseId || '')
     const attendanceDate = String(body.date || '')
@@ -1592,7 +1719,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/grades/courses' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assignments = await db.all(`SELECT c.id AS "courseId", c.name AS "courseName", c.grade,
       c.academic_year AS "academicYear", ct.subject, u.full_name AS "teacherName"
       FROM course_teachers ct JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id
@@ -1601,7 +1728,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { assignments })
   }
   if (url.pathname === '/api/grades/assessments' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const courseId = String(url.searchParams.get('courseId') || '')
     const subject = String(url.searchParams.get('subject') || '')
     const period = String(url.searchParams.get('period') || '')
@@ -1616,7 +1743,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { assessments })
   }
   if (url.pathname === '/api/grades/assessments' && method === 'POST') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear evaluaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear evaluaciones.' })
     const body = await readLargeJsonBody(request, 30 * 1024 * 1024)
     const courseId = String(body.courseId || '')
     const subject = String(body.subject || '').trim()
@@ -1674,7 +1801,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
       c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
@@ -1697,7 +1824,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const gradeAssessmentDeleteMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentDeleteMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar evaluaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar evaluaciones.' })
     const assessment = await db.get('SELECT id, course_id AS "courseId", subject, title FROM grade_assessments WHERE id = ? AND school_id = ?', gradeAssessmentDeleteMatch[1], user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
@@ -1708,7 +1835,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const assessmentPublicationMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/publication$/i)
   if (assessmentPublicationMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para publicar evaluaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para publicar evaluaciones.' })
     const body = await readBody(request)
     if (typeof body.isPublished !== 'boolean') return json(response, 400, { error: 'Indica si deseas publicar o retirar esta evaluación.' })
     const assessment = await db.get('SELECT id, course_id AS "courseId", subject, delivery_mode AS "deliveryMode" FROM grade_assessments WHERE id = ? AND school_id = ?', assessmentPublicationMatch[1], user.school_id)
@@ -1722,7 +1849,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const gradeAssessmentWeightMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/weight$/i)
   if (gradeAssessmentWeightMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar ponderaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para cambiar ponderaciones.' })
     const body = await readBody(request)
     const weightPercent = Number(body.weightPercent)
     if (!Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100) return json(response, 400, { error: 'La ponderación debe estar entre 0,01 y 100 %.' })
@@ -1736,7 +1863,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { weightPercent })
   }
   if (url.pathname === '/api/grades/rule' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar reglas académicas.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar reglas académicas.' })
     const courseId = String(url.searchParams.get('courseId') || '')
     const subject = String(url.searchParams.get('subject') || '').trim()
     const period = String(url.searchParams.get('period') || '').trim()
@@ -1750,7 +1877,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { rule: rule ? { ...rule, scaleMin: Number(rule.scaleMin), scaleMax: Number(rule.scaleMax), passingScore: Number(rule.passingScore) } : null })
   }
   if (url.pathname === '/api/grades/rule' && method === 'PUT') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para configurar reglas académicas.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para configurar reglas académicas.' })
     const body = await readBody(request)
     const courseId = String(body.courseId || '')
     const subject = String(body.subject || '').trim()
@@ -1775,7 +1902,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const gradeScoresMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/scores$/i)
   if (gradeScoresMatch && method === 'POST') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar calificaciones.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar calificaciones.' })
     const body = await readBody(request)
     if (!Array.isArray(body.records) || body.records.length < 1 || body.records.length > 500) return json(response, 400, { error: 'Selecciona al menos una calificación para guardar.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.max_score AS "maxScore", c.grade, c.academic_year AS "academicYear"
@@ -1805,7 +1932,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/grades/report-card/options' && method === 'GET') {
-    const permitted = ['admin', 'secretaria', 'docente', 'acudiente', 'estudiante']
+    const permitted = ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante']
     if (!permitted.includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
     let students
     if (['acudiente', 'estudiante'].includes(user.role)) {
@@ -1830,7 +1957,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { students, years: years.map(item => item.year), periods: ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4'], publications: publications.map(item => ({ ...item, isPublished: Boolean(item.isPublished) })) })
   }
   if (url.pathname === '/api/grades/publications' && method === 'PUT') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden publicar boletines.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden publicar boletines.' })
     const body = await readBody(request)
     const academicYear = String(body.academicYear || '')
     const period = String(body.period || '')
@@ -1852,7 +1979,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
     const studentId = String(url.searchParams.get('studentId') || '')
     const academicYear = String(url.searchParams.get('academicYear') || '')
     const period = String(url.searchParams.get('period') || '')
@@ -1905,10 +2032,21 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     })
     await db.run(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING`, randomUUID(), user.school_id, student.id, academicYear, period)
-    const verification = await db.get('SELECT token FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+    const reportCourse = await db.get(`SELECT c.id FROM courses c WHERE c.school_id = ? AND c.grade = ? AND c.academic_year = ?
+      AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
+        OR NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = ? AND se.student_id = ? AND se.status = 'Activa'))
+      ORDER BY c.is_active DESC, c.created_at DESC LIMIT 1`, user.school_id, student.grade, academicYear, student.id, user.school_id, student.id)
+    const currentSignatures = await resolveDocumentSigners(user.school_id, 'report_card', reportCourse?.id || null)
+    const verification = await db.get('SELECT token, signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+    if ((!verification.signatureSnapshot || verification.signatureSnapshot === '[]') && currentSignatures.length) {
+      await db.run('UPDATE report_card_verifications SET signature_snapshot = ? WHERE token = ? AND (signature_snapshot IS NULL OR signature_snapshot = \'[]\')', JSON.stringify(currentSignatures), verification.token)
+      verification.signatureSnapshot = JSON.stringify(currentSignatures)
+    }
+    let reportSignatures = []
+    try { reportSignatures = JSON.parse(verification.signatureSnapshot || '[]') } catch { reportSignatures = currentSignatures }
     const reportSchool = await db.get('SELECT name, slug, address, contact_email AS "contactEmail", contact_phone AS "contactPhone", primary_color AS "primaryColor", logo_content_type AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student, academicYear, period, subjects, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
+    return json(response, 200, { student, academicYear, period, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
@@ -2074,7 +2212,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const assessmentSubmissionsMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/submissions$/i)
   if (assessmentSubmissionsMatch && method === 'GET') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar entregas.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar entregas.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, c.grade FROM grade_assessments a
       JOIN courses c ON c.id = a.course_id WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, assessmentSubmissionsMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
@@ -2116,20 +2254,20 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const submissionDeleteMatch = url.pathname.match(/^\/api\/grades\/submissions\/([0-9a-f-]{36})$/i)
   if (submissionDeleteMatch && method === 'DELETE') {
-    if (!['admin', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar entregas.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar entregas.' })
     const submission = await db.get(`SELECT ws.id, ws.student_id AS "studentId", ws.assessment_id AS "assessmentId", a.course_id AS "courseId", a.subject, ws.original_file_name AS "fileName"
       FROM work_submissions ws JOIN grade_assessments a ON a.id = ws.assessment_id
       WHERE ws.id = ? AND ws.school_id = ? AND a.school_id = ?`, submissionDeleteMatch[1], user.school_id, user.school_id)
     if (!submission) return json(response, 404, { error: 'No encontramos esta entrega en el colegio.' })
     const teacher = user.role === 'docente' && await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND user_id = ?', submission.courseId, submission.subject, user.id)
-    if (!['admin', 'secretaria'].includes(user.role) && !teacher) return json(response, 403, { error: 'No tienes asignada la evaluación de esta entrega.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role) && !teacher) return json(response, 403, { error: 'No tienes asignada la evaluación de esta entrega.' })
     await db.run('DELETE FROM work_submissions WHERE assessment_id = ? AND student_id = ? AND school_id = ?', submission.assessmentId, submission.studentId, user.school_id)
     await logAudit(user.school_id, user.id, 'work_submission_deleted')
     return json(response, 200, { deleted: true })
   }
 
   if (url.pathname === '/api/enrollments' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar matrículas.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar matrículas.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
     const status = String(url.searchParams.get('status') || 'Todos')
     const requests = await db.all(`SELECT id, student_id AS "studentId", student_name AS "studentName", document,
@@ -2142,7 +2280,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { requests })
   }
   if (url.pathname === '/api/enrollments' && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear solicitudes de matrícula.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear solicitudes de matrícula.' })
     const body = await readBody(request)
     const studentName = String(body.studentName || '').trim()
     const document = String(body.document || '').trim()
@@ -2166,7 +2304,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const enrollmentRequestMatch = url.pathname.match(/^\/api\/enrollments\/([0-9a-f-]{36})$/i)
   if (enrollmentRequestMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para procesar matrículas.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para procesar matrículas.' })
     const id = enrollmentRequestMatch[1]
     const requestRecord = await db.get(`SELECT * FROM enrollment_requests WHERE id = ? AND school_id = ?`, id, user.school_id)
     if (!requestRecord) return json(response, 404, { error: 'No encontramos esa solicitud en este colegio.' })
@@ -2205,7 +2343,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { id, studentId, enrollmentId, status: 'Aprobada' })
   }
   if (url.pathname === '/api/enrollments/history' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden consultar historial de matrículas.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar historial de matrículas.' })
     const records = await db.all(`SELECT se.id, se.student_id AS "studentId", st.full_name AS "studentName", st.document,
       st.grade, se.course_id AS "courseId", c.name AS "courseName", se.academic_year AS "academicYear",
       se.status, se.start_date AS "startDate", se.end_date AS "endDate", se.notes
@@ -2216,7 +2354,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   const enrollmentTransferMatch = url.pathname.match(/^\/api\/enrollments\/history\/([0-9a-f-]{36})\/transfer$/i)
   if (enrollmentTransferMatch && method === 'POST') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración y secretaría pueden trasladar estudiantes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden trasladar estudiantes.' })
     const body = await readBody(request)
     const destinationCourseId = String(body.courseId || '')
     const effectiveDate = String(body.effectiveDate || '')
@@ -2260,7 +2398,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { students })
   }
   if (url.pathname === '/api/students' && method === 'POST') {
-    if (user.role !== 'admin' && user.role !== 'secretaria') return json(response, 403, { error: 'No tienes permiso para crear estudiantes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para crear estudiantes.' })
     const body = await readLargeJsonBody(request, 3 * 1024 * 1024)
     const name = String(body.name || '').trim()
     const documentNumber = String(body.document || '').trim()
@@ -2283,7 +2421,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
     const studentMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})$/i)
   if (studentMatch && method === 'PATCH') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para modificar estudiantes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para modificar estudiantes.' })
     const id = studentMatch[1]
     const existing = await db.get('SELECT id, card_code AS "cardCode" FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
     if (!existing) return json(response, 404, { error: 'No encontramos ese estudiante en este colegio.' })
@@ -2307,7 +2445,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { student: await db.get('SELECT id, full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt" FROM students WHERE id = ? AND school_id = ?', id, user.school_id) })
   }
   if (studentMatch && method === 'DELETE') {
-    if (user.role !== 'admin') return json(response, 403, { error: 'Solo un administrador puede eliminar estudiantes.' })
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden eliminar estudiantes.' })
     const id = studentMatch[1]
     const existing = await db.get('SELECT id FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
     if (!existing) return json(response, 404, { error: 'No encontramos ese estudiante en este colegio.' })

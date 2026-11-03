@@ -282,3 +282,32 @@ html,body,#root,.app-shell{width:100%;max-width:100%;overflow-x:clip}.main-area{
 .public-verification-footer{padding:17px;text-align:center;color:#8997a0;font-size:9px}
 @media(max-width:600px){.report-card-document{padding:20px 15px;border-radius:11px}.report-card-header{gap:10px}.report-card-institution-logo{width:46px;height:46px}.report-card-header h2{font-size:15px}.report-card-period{font-size:9px}.report-card-student{grid-template-columns:1fr 1fr;padding:11px}.report-card-student>div:first-child{grid-column:1/-1}.report-card-document-footer{grid-template-columns:1fr 1fr;gap:18px}.report-card-qr{grid-column:1/-1;justify-self:center}.certificate-verification{align-items:center}.public-verification-card{padding:25px 18px}.public-verification-card h1{font-size:23px}.public-verification-top>span{font-size:9px}.public-verification-details{gap:0 10px}}
 @media print{.report-card-document-footer{break-inside:avoid}.report-card-qr svg,.certificate-verification svg{print-color-adjust:exact;-webkit-print-color-adjust:exact}.certificate-verification{break-inside:avoid}.certificate-heading,.report-card-header,.report-card-student,.report-subject-heading,.report-card-disclaimer{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+
+/* Personal institutional y firmas */
+.staff-profile-form,.staff-directory-panel,.staff-directors-panel,.staff-rules-panel{margin:18px 0;padding:20px;border:1px solid #dfe8ef;border-radius:16px;background:#fff;box-shadow:0 8px 24px rgba(27,57,83,.035)}
+.staff-profile-form .panel-heading,.staff-directory-panel .panel-heading,.staff-directors-panel .panel-heading,.staff-rules-panel .panel-heading{margin-bottom:16px}
+.staff-profile-form .panel-heading h2,.staff-directory-panel .panel-heading h2,.staff-directors-panel .panel-heading h2,.staff-rules-panel .panel-heading h2{margin:0;color:#203b53;font-size:17px;font-weight:750}
+.staff-profile-form .panel-heading p,.staff-directory-panel .panel-heading p,.staff-directors-panel .panel-heading p,.staff-rules-panel .panel-heading p{margin:5px 0 0;color:#7a8c9c;font-size:12px}
+.staff-course-fieldset{min-width:0;margin:0;padding:13px;border:1px solid #e2eaf0;border-radius:12px}
+.staff-course-fieldset legend{float:none;width:auto;padding:0 5px;color:#35536a;font-size:12px;font-weight:700}
+.staff-course-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px 14px;max-height:190px;overflow:auto}
+.staff-course-options label{display:flex;align-items:center;gap:8px;color:#546a7d;font-size:11px}
+.staff-course-options input,.staff-profile-form input[type=checkbox]{accent-color:#286b83}
+.staff-director-list{display:grid;gap:9px}
+.staff-director-list>div{display:grid;grid-template-columns:minmax(190px,1fr) minmax(240px,1.3fr) auto;align-items:center;gap:12px;padding:11px 13px;border:1px solid #e5edf2;border-radius:11px}
+.staff-director-list strong{color:#314c63;font-size:12px}.staff-director-list strong small{display:block;margin-top:3px;color:#8494a2;font-size:10px;font-weight:500}
+.staff-director-list select,.staff-rules-list select{min-height:38px;padding:8px 10px;border:1px solid #d8e3ea;border-radius:8px;background:#fff;color:#425b70;font-size:11px}
+.staff-rules-list{display:grid;gap:11px}
+.staff-rules-list article{display:grid;grid-template-columns:minmax(150px,.8fr) repeat(4,minmax(150px,1fr)) auto;align-items:end;gap:10px;padding:13px;border:1px solid #e6edf2;border-radius:11px;background:#fbfdfe}
+.staff-rules-list article>strong{align-self:center;color:#2d4c63;font-size:12px}
+.staff-rules-list article>label{display:grid;gap:6px;color:#758696;font-size:10px;font-weight:650}
+.staff-rules-list .button{min-height:37px;padding:7px 11px;white-space:nowrap;font-size:10px}
+.staff-legal-note{display:flex;gap:8px;align-items:flex-start;margin:16px 2px;color:#778997;font-size:11px;line-height:1.6}
+.staff-legal-note svg{flex:none;color:#358879}
+.document-signature-image{display:block;width:auto;max-width:190px;height:auto;max-height:64px;object-fit:contain;margin:0 auto 4px}
+.certificate-signature .document-signature-image{max-height:82px}
+.report-card-signature>strong{display:block;color:#253f57;font-size:10px}
+.report-no-signatures{align-self:center;color:#8795a0;font-size:10px}
+@media(max-width:1100px){.staff-rules-list article{grid-template-columns:repeat(2,minmax(160px,1fr))}.staff-rules-list article>strong{grid-column:1/-1}.staff-rules-list article>.button{grid-column:1/-1;justify-self:start}}
+@media(max-width:720px){.staff-profile-form,.staff-directory-panel,.staff-directors-panel,.staff-rules-panel{padding:14px;border-radius:12px}.staff-director-list>div{grid-template-columns:1fr}.staff-director-list .button{justify-self:start}.staff-rules-list article{grid-template-columns:1fr}.staff-rules-list article>strong,.staff-rules-list article>.button{grid-column:auto}.staff-course-options{grid-template-columns:1fr}}
+@media print{.document-signature-image{max-height:74px;print-color-adjust:exact;-webkit-print-color-adjust:exact}}
