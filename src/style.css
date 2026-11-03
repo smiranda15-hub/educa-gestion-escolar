@@ -215,3 +215,8 @@ html,body,#root,.app-shell{width:100%;max-width:100%;overflow-x:clip}.main-area{
 .guardian-linked-students>span{color:#35566b;font-size:11px;line-height:1.4}
 .guardian-linked-students>small{color:#708697;font-size:10px}
 .muted-dash{color:#9aa8b1}
+.institution-marketing-nav .institution-download-link,.institution-download-link{display:inline-flex;align-items:center;gap:7px;color:#276e83;font-size:11px;font-weight:700;text-decoration:none}
+.institution-marketing-nav .institution-download-link:hover,.institution-download-link:hover{color:#174c62;text-decoration:underline}
+.institution-hero-download{color:#276e83}
+.institution-entry-footer .institution-footer-download{color:#286b83;font-size:10px}
+@media(max-width:560px){.institution-footer-download{align-self:flex-start}}
