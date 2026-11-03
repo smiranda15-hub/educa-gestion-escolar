@@ -786,6 +786,29 @@ export async function migrate() {
     })
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 22)
   }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 23)) {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS password_reset_requests (
+        id TEXT PRIMARY KEY,
+        school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        email TEXT NOT NULL,
+        full_name_snapshot TEXT NOT NULL DEFAULT '',
+        role_snapshot TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'Pendiente' CHECK (status IN ('Pendiente','Aprobada','Rechazada','Completada')),
+        reset_token_hash TEXT,
+        token_expires_at TEXT,
+        requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at TEXT,
+        review_note TEXT NOT NULL DEFAULT '',
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS password_reset_requests_inbox_idx ON password_reset_requests(school_id, status, requested_at);
+      CREATE INDEX IF NOT EXISTS password_reset_requests_user_idx ON password_reset_requests(school_id, user_id, status);
+    `)
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 23)
+  }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)

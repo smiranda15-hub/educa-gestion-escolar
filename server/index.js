@@ -11,6 +11,8 @@ const secureCookie = process.env.NODE_ENV === 'production' ? '; Secure' : ''
 const sessionTtl = 8 * 60 * 60 * 1000
 const institutionManagerEmail = 'smiranda15@uan.edu.co'
 const loginAttempts = new Map()
+const passwordResetRequestAttempts = new Map()
+const passwordResetReviewRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria'])
 const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
 const institutionalManagerRoles = ['admin', 'rectoria']
 const signerPositions = new Set(['rector', 'academic_coordinator', 'coexistence_coordinator', 'teacher', 'group_director', 'academic_secretary', 'administrative', 'other'])
@@ -221,6 +223,68 @@ async function route(request, response) {
   if (method === 'GET' && url.pathname === '/api/auth/setup-status') {
     const count = Number((await db.get('SELECT COUNT(*) AS count FROM users')).count)
     return json(response, 200, { setupRequired: count === 0 })
+  }
+  if (method === 'POST' && url.pathname === '/api/auth/password-reset-requests') {
+    const address = request.socket.remoteAddress || 'unknown'
+    const now = Date.now()
+    const attempt = passwordResetRequestAttempts.get(address)
+    if (attempt && attempt.expiresAt > now && attempt.count >= 5) return json(response, 200, { message: 'Si los datos corresponden a una cuenta activa, la solicitud quedó registrada para revisión.' })
+    if (!attempt || attempt.expiresAt <= now) passwordResetRequestAttempts.set(address, { count: 1, expiresAt: now + 15 * 60_000 })
+    else attempt.count += 1
+    if (passwordResetRequestAttempts.size > 10_000) for (const [key, value] of passwordResetRequestAttempts) if (value.expiresAt <= now) passwordResetRequestAttempts.delete(key)
+    const body = await readBody(request)
+    const slug = slugify(String(body.school || '').trim())
+    const email = String(body.email || '').trim().toLowerCase()
+    const genericMessage = 'Si los datos corresponden a una cuenta activa, la solicitud quedó registrada para revisión.'
+    if (!slug || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json(response, 200, { message: genericMessage })
+    const account = await db.get(`SELECT u.id, u.school_id AS "schoolId", u.full_name AS "fullName", u.role
+      FROM users u JOIN schools s ON s.id = u.school_id
+      WHERE s.slug = ? AND s.is_active = 1 AND s.archived_at IS NULL AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
+    if (!account || !accountRoles.has(account.role)) return json(response, 200, { message: genericMessage })
+    const recent = await db.get(`SELECT id FROM password_reset_requests WHERE school_id = ? AND user_id = ?
+      AND status IN ('Pendiente','Aprobada') ORDER BY requested_at DESC LIMIT 1`, account.schoolId, account.id)
+    if (!recent) {
+      const id = randomUUID()
+      let reviewerIds = []
+      await db.transaction(async tx => {
+        await tx.run(`INSERT INTO password_reset_requests (id, school_id, user_id, email, full_name_snapshot, role_snapshot)
+          VALUES (?, ?, ?, ?, ?, ?)`, id, account.schoolId, account.id, email, account.fullName, account.role)
+        const reviewers = await tx.all(`SELECT id FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria')
+          AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
+        reviewerIds = reviewers.map(reviewer => reviewer.id)
+        for (const reviewer of reviewers) await tx.run(`INSERT INTO user_notifications (id, school_id, user_id, title, body, category)
+          VALUES (?, ?, ?, ?, ?, ?)`, randomUUID(), account.schoolId, reviewer.id, 'Solicitud de recuperación de contraseña', `${account.fullName} · Revisa la solicitud en Solicitudes de contraseña.`, 'password_reset')
+        await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, NULL, ?)', account.schoolId, 'password_reset_requested')
+      })
+      await sendPushNotifications(account.schoolId, reviewerIds, 'Solicitud de recuperación de contraseña', 'Hay una solicitud pendiente en el panel de soporte.', 'password_reset', id)
+    }
+    return json(response, 200, { message: genericMessage })
+  }
+  if (method === 'POST' && url.pathname === '/api/auth/password-reset') {
+    const body = await readBody(request)
+    const slug = slugify(String(body.school || '').trim())
+    const email = String(body.email || '').trim().toLowerCase()
+    const code = String(body.code || '').trim()
+    const newPassword = String(body.newPassword || '')
+    if (newPassword.length < 12 || newPassword.length > 128) return json(response, 400, { error: 'La nueva contraseña debe tener entre 12 y 128 caracteres.' })
+    const school = slug ? await db.get('SELECT id FROM schools WHERE slug = ? AND is_active = 1 AND archived_at IS NULL', slug) : null
+    const requestRecord = school && email && code ? await db.get(`SELECT r.id, r.user_id AS "userId", r.reset_token_hash AS "resetTokenHash", u.id AS "activeUserId"
+      FROM password_reset_requests r JOIN users u ON u.id = r.user_id
+      WHERE r.school_id = ? AND r.email = ? AND r.status = 'Aprobada' AND r.token_expires_at > ?
+      AND u.is_active = 1 AND u.deleted_at IS NULL ORDER BY r.reviewed_at DESC LIMIT 1`, school.id, email, new Date().toISOString()) : null
+    const actualHash = Buffer.from(hashToken(code), 'hex')
+    const expectedHash = Buffer.from(requestRecord?.resetTokenHash || '', 'hex')
+    const validCode = expectedHash.length === actualHash.length && timingSafeEqual(expectedHash, actualHash)
+    if (!requestRecord || !validCode) return json(response, 400, { error: 'No se pudo validar la solicitud. Revisa institución, correo y código o solicita una nueva revisión.' })
+    const passwordHash = await hashPassword(newPassword)
+    await db.transaction(async tx => {
+      await tx.run('UPDATE users SET password_hash = ? WHERE id = ? AND school_id = ?', passwordHash, requestRecord.userId, school.id)
+      await tx.run('DELETE FROM sessions WHERE user_id = ?', requestRecord.userId)
+      await tx.run(`UPDATE password_reset_requests SET status = 'Completada', reset_token_hash = NULL, token_expires_at = NULL,
+        completed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ? AND status = 'Aprobada'`, requestRecord.id, school.id)
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', school.id, requestRecord.userId, 'password_reset_completed')
+    })
+    return json(response, 200, { message: 'La contraseña se actualizó. Ya puedes iniciar sesión.' })
   }
   const publicSchoolLogo = url.pathname.match(/^\/api\/schools\/([a-z0-9-]{1,48})\/logo$/i)
   if (method === 'GET' && publicSchoolLogo) {
@@ -453,6 +517,41 @@ async function route(request, response) {
   }
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+
+  if (url.pathname === '/api/password-reset-requests' && method === 'GET') {
+    if (!passwordResetReviewRoles.has(user.role)) return json(response, 403, { error: 'Solo rectoría y administración pueden revisar estas solicitudes.' })
+    const requests = await db.all(`SELECT r.id, r.email, r.full_name_snapshot AS "fullName", r.role_snapshot AS role,
+      r.status, r.requested_at AS "requestedAt", r.reviewed_at AS "reviewedAt", r.review_note AS "reviewNote",
+      r.token_expires_at AS "tokenExpiresAt", reviewer.full_name AS "reviewerName"
+      FROM password_reset_requests r LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
+      WHERE r.school_id = ? ORDER BY CASE r.status WHEN 'Pendiente' THEN 0 WHEN 'Aprobada' THEN 1 ELSE 2 END, r.requested_at DESC LIMIT 100`, user.school_id)
+    return json(response, 200, { requests })
+  }
+  const passwordResetRequestMatch = url.pathname.match(/^\/api\/password-reset-requests\/([0-9a-f-]{36})$/i)
+  if (passwordResetRequestMatch && method === 'PATCH') {
+    if (!passwordResetReviewRoles.has(user.role)) return json(response, 403, { error: 'Solo rectoría y administración pueden aprobar solicitudes.' })
+    const body = await readBody(request)
+    const action = String(body.action || '')
+    const note = String(body.note || '').trim().slice(0, 500)
+    const requestRecord = await db.get('SELECT id, user_id AS "userId", status FROM password_reset_requests WHERE id = ? AND school_id = ?', passwordResetRequestMatch[1], user.school_id)
+    if (!requestRecord) return json(response, 404, { error: 'No encontramos la solicitud.' })
+    if (action === 'reject') {
+      if (requestRecord.status !== 'Pendiente') return json(response, 409, { error: 'Solo se pueden rechazar solicitudes pendientes.' })
+      await db.run(`UPDATE password_reset_requests SET status = 'Rechazada', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, user.id, note, requestRecord.id, user.school_id)
+      await logAudit(user.school_id, user.id, 'password_reset_request_rejected')
+      return json(response, 200, { updated: true, status: 'Rechazada' })
+    }
+    if (action !== 'approve' && action !== 'renew') return json(response, 400, { error: 'Acción de solicitud no válida.' })
+    if (action === 'approve' && requestRecord.status !== 'Pendiente' || action === 'renew' && requestRecord.status !== 'Aprobada') return json(response, 409, { error: 'El estado de la solicitud ya cambió.' })
+    const target = await db.get('SELECT id FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL', requestRecord.userId, user.school_id)
+    if (!target) return json(response, 409, { error: 'La cuenta asociada ya no está activa. Rechaza esta solicitud.' })
+    const resetCode = randomBytes(24).toString('base64url')
+    const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
+    await db.run(`UPDATE password_reset_requests SET status = 'Aprobada', reset_token_hash = ?, token_expires_at = ?,
+      reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, hashToken(resetCode), expiresAt, user.id, note, requestRecord.id, user.school_id)
+    await logAudit(user.school_id, user.id, action === 'renew' ? 'password_reset_code_renewed' : 'password_reset_request_approved')
+    return json(response, 200, { updated: true, status: 'Aprobada', resetCode, expiresAt })
+  }
 
   if (url.pathname === '/api/profile' && method === 'GET') {
     const account = await db.get('SELECT full_name AS name, email, role, contact_phone AS phone, profile_photo_data AS photo FROM users WHERE id = ? AND school_id = ?', user.id, user.school_id)
