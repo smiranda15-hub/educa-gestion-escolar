@@ -9,6 +9,7 @@ const scrypt = promisify(scryptCallback)
 const port = Number(process.env.PORT || process.env.API_PORT || 3001)
 const secureCookie = process.env.NODE_ENV === 'production' ? '; Secure' : ''
 const sessionTtl = 8 * 60 * 60 * 1000
+const institutionManagerEmail = 'smiranda15@uan.edu.co'
 const loginAttempts = new Map()
 const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
 const stateChangingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
@@ -121,9 +122,95 @@ async function route(request, response) {
     const count = Number((await db.get('SELECT COUNT(*) AS count FROM users')).count)
     return json(response, 200, { setupRequired: count === 0 })
   }
+  const publicSchoolLogo = url.pathname.match(/^\/api\/schools\/([a-z0-9-]{1,48})\/logo$/i)
+  if (method === 'GET' && publicSchoolLogo) {
+    const logo = await db.get('SELECT logo_content_type AS "contentType", logo_data AS "fileData" FROM schools WHERE slug = ? AND logo_content_type IS NOT NULL', publicSchoolLogo[1].toLowerCase())
+    if (!logo) return json(response, 404, { error: 'Logo institucional no encontrado.' })
+    response.writeHead(200, { 'Content-Type': logo.contentType, 'Content-Length': String(logo.fileData.length), 'Cache-Control': 'public, max-age=3600', 'X-Content-Type-Options': 'nosniff' })
+    response.end(logo.fileData)
+    return
+  }
   if (method === 'GET' && url.pathname === '/api/schools') {
-    const schools = await db.all('SELECT id, slug, name FROM schools ORDER BY name')
+    const schools = await db.all('SELECT id, slug, name, primary_color AS "primaryColor", logo_content_type AS "logoContentType" FROM schools ORDER BY name')
+    for (const school of schools) school.hasLogo = Boolean(school.logoContentType), delete school.logoContentType
     return json(response, 200, { schools })
+  }
+  if (url.pathname === '/api/institutions' && method === 'GET') {
+    const user = await getSession(request)
+    if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para administrar varias instituciones.' })
+    const institutions = await db.all(`SELECT s.id, s.slug, s.name, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone", s.address,
+      s.primary_color AS "primaryColor", CASE WHEN s.logo_content_type IS NULL THEN 0 ELSE 1 END AS "hasLogo",
+      (SELECT COUNT(*) FROM users u WHERE u.school_id = s.id AND u.role = 'admin' AND u.is_active = 1 AND u.deleted_at IS NULL) AS "activeAdmins"
+      FROM schools s ORDER BY s.name`)
+    return json(response, 200, { institutions })
+  }
+  if (url.pathname === '/api/institutions' && method === 'POST') {
+    const user = await getSession(request)
+    if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para crear instituciones.' })
+    const body = await readLargeJsonBody(request, 2 * 1024 * 1024)
+    const schoolName = String(body.schoolName || '').trim()
+    const adminName = String(body.adminName || '').trim()
+    const email = String(body.email || '').trim().toLowerCase()
+    const password = String(body.password || '')
+    const contactEmail = String(body.contactEmail || '').trim().toLowerCase()
+    const contactPhone = String(body.contactPhone || '').trim()
+    const address = String(body.address || '').trim()
+    const primaryColor = String(body.primaryColor || '#6c70df').trim()
+    if (schoolName.length < 2 || schoolName.length > 120 || adminName.length < 2 || adminName.length > 100) return json(response, 400, { error: 'Revisa el nombre de la institución y el administrador.' })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json(response, 400, { error: 'Ingresa un correo válido para el administrador.' })
+    if (password.length < 12 || password.length > 128) return json(response, 400, { error: 'La contraseña inicial debe tener entre 12 y 128 caracteres.' })
+    if (contactEmail && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail) || contactEmail.length > 254)) return json(response, 400, { error: 'El correo de contacto no es válido.' })
+    if (contactPhone.length > 30 || !/^[\d+() .-]*$/.test(contactPhone) || address.length > 240 || !/^#[0-9a-f]{6}$/i.test(primaryColor)) return json(response, 400, { error: 'Revisa el teléfono, la dirección y el color institucional.' })
+    let logo = null
+    if (body.logo) {
+      const fileName = String(body.logo.fileName || '')
+      const contentType = String(body.logo.contentType || '')
+      const encoded = String(body.logo.fileBase64 || '')
+      const allowed = new Map([['.png', ['image/png', bytes => bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a']], ['.jpg', ['image/jpeg', bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff']], ['.jpeg', ['image/jpeg', bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff']], ['.webp', ['image/webp', bytes => bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP']]])
+      const extension = extname(fileName).toLowerCase(), spec = allowed.get(extension)
+      if (!spec || contentType !== spec[0] || encoded.length > 1024 * 1024 * 1.38 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return json(response, 400, { error: 'El logo debe ser PNG, JPG o WEBP y pesar máximo 1 MB.' })
+      const fileData = Buffer.from(encoded, 'base64')
+      if (!fileData.length || fileData.length > 1024 * 1024 || !spec[1](fileData)) return json(response, 400, { error: 'El archivo del logo no es válido.' })
+      logo = { fileName: basename(fileName).slice(0, 160), contentType, fileData }
+    }
+    const slug = slugify(schoolName) || 'colegio'
+    if (await db.get('SELECT 1 FROM schools WHERE slug = ?', slug)) return json(response, 409, { error: 'Ya existe una institución con ese nombre o código.' })
+    const schoolId = randomUUID(), userId = randomUUID(), passwordHash = await hashPassword(password)
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO schools (id, slug, name, contact_email, contact_phone, address, primary_color, logo_content_type, logo_file_name, logo_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', schoolId, slug, schoolName, contactEmail, contactPhone, address, primaryColor.toLowerCase(), logo?.contentType || null, logo?.fileName || null, logo?.fileData || null)
+      await tx.run('INSERT INTO users (id, school_id, email, full_name, password_hash, role) VALUES (?, ?, ?, ?, ?, ?) ', userId, schoolId, email, adminName, passwordHash, 'admin')
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', schoolId, user.id, 'institution_created')
+    })
+    return json(response, 201, { created: true, institution: { id: schoolId, slug, name: schoolName, contactEmail, contactPhone, address, primaryColor: primaryColor.toLowerCase(), hasLogo: Boolean(logo) }, message: 'Institución y cuenta administradora creadas.' })
+  }
+  const institutionSettingsMatch = url.pathname.match(/^\/api\/institutions\/([0-9a-f-]{36})$/i)
+  if (institutionSettingsMatch && method === 'PATCH') {
+    const user = await getSession(request)
+    if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para editar instituciones.' })
+    const school = await db.get('SELECT id, slug, logo_content_type AS "logoContentType" FROM schools WHERE id = ?', institutionSettingsMatch[1])
+    if (!school) return json(response, 404, { error: 'No encontramos esa institución.' })
+    const body = await readLargeJsonBody(request, 2 * 1024 * 1024)
+    const name = String(body.name || '').trim(), contactEmail = String(body.contactEmail || '').trim().toLowerCase()
+    const contactPhone = String(body.contactPhone || '').trim(), address = String(body.address || '').trim()
+    const primaryColor = String(body.primaryColor || '').trim()
+    if (name.length < 2 || name.length > 120 || (contactEmail && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail) || contactEmail.length > 254)) || contactPhone.length > 30 || !/^[\d+() .-]*$/.test(contactPhone) || address.length > 240 || !/^#[0-9a-f]{6}$/i.test(primaryColor)) return json(response, 400, { error: 'Revisa el nombre, correo, teléfono, dirección y color institucional.' })
+    let logo = null
+    if (body.logo) {
+      const fileName = String(body.logo.fileName || ''), contentType = String(body.logo.contentType || ''), encoded = String(body.logo.fileBase64 || '')
+      const allowed = new Map([['.png', ['image/png', bytes => bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a']], ['.jpg', ['image/jpeg', bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff']], ['.jpeg', ['image/jpeg', bytes => bytes.subarray(0, 3).toString('hex') === 'ffd8ff']], ['.webp', ['image/webp', bytes => bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP']]])
+      const extension = extname(fileName).toLowerCase(), spec = allowed.get(extension)
+      if (!spec || contentType !== spec[0] || encoded.length > 1024 * 1024 * 1.38 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return json(response, 400, { error: 'El logo debe ser PNG, JPG o WEBP y pesar máximo 1 MB.' })
+      const fileData = Buffer.from(encoded, 'base64')
+      if (!fileData.length || fileData.length > 1024 * 1024 || !spec[1](fileData)) return json(response, 400, { error: 'El archivo del logo no es válido.' })
+      logo = { fileName: basename(fileName).slice(0, 160), contentType, fileData }
+    }
+    await db.transaction(async tx => {
+      await tx.run('UPDATE schools SET name = ?, contact_email = ?, contact_phone = ?, address = ?, primary_color = ? WHERE id = ?', name, contactEmail, contactPhone, address, primaryColor.toLowerCase(), school.id)
+      if (body.removeLogo === true) await tx.run('UPDATE schools SET logo_content_type = NULL, logo_file_name = NULL, logo_data = NULL WHERE id = ?', school.id)
+      if (logo) await tx.run('UPDATE schools SET logo_content_type = ?, logo_file_name = ?, logo_data = ? WHERE id = ?', logo.contentType, logo.fileName, logo.fileData, school.id)
+      await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', school.id, user.id, 'institution_branding_updated')
+    })
+    return json(response, 200, { institution: { id: school.id, slug: school.slug, name, contactEmail, contactPhone, address, primaryColor: primaryColor.toLowerCase(), hasLogo: body.removeLogo === true ? Boolean(logo) : Boolean(logo || school.logoContentType) } })
   }
   if (method === 'POST' && url.pathname === '/api/auth/setup') {
     if (Number((await db.get('SELECT COUNT(*) AS count FROM users')).count) !== 0) return json(response, 409, { error: 'La configuración inicial ya se completó.' })
