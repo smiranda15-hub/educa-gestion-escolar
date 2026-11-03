@@ -353,7 +353,7 @@ async function route(request, response) {
       await sendPushNotifications(account.schoolId, reviewerIds, 'Solicitud de recuperación de contraseña', 'Hay una solicitud pendiente en el panel de soporte.', 'password_reset', id)
       const reviewerEmails = await db.all(`SELECT email FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria') AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
       await sendEmail({ bcc: reviewerEmails.map(item => item.email), subject: 'EDUCA: solicitud de recuperación de contraseña', text: `Hay una solicitud de recuperación pendiente para ${account.fullName} (${account.role}).\nIngresa a EDUCA y revisa el módulo Solicitudes de contraseña. No compartas códigos por otros canales.` })
-      await sendEmail({ to: email, subject: 'EDUCA: recibimos tu solicitud de recuperación', text: `Hola ${account.fullName},\nRecibimos tu solicitud para recuperar el acceso a EDUCA. Rectoría o administración debe revisarla; si la aprueba, recibirás un código temporal en este correo.\n\nNo envíes tu contraseña actual ni compartas códigos.` })
+      await sendEmail({ to: email, subject: 'EDUCA: recibimos tu solicitud de recuperación', text: `Hola ${account.fullName},\nRecibimos tu solicitud para recuperar el acceso a EDUCA. Rectoría o administración debe revisarla. Si la aprueba, recibirás en este correo un enlace seguro para crear una nueva contraseña.\n\nEl enlace vence en 30 minutos y solo se puede usar una vez. Si no solicitaste este cambio, contacta a tu institución. No compartas enlaces ni códigos.` })
     }
     return json(response, 200, { message: genericMessage })
   }
@@ -643,15 +643,19 @@ async function route(request, response) {
     }
     if (action !== 'approve' && action !== 'renew') return json(response, 400, { error: 'Acción de solicitud no válida.' })
     if (action === 'approve' && requestRecord.status !== 'Pendiente' || action === 'renew' && requestRecord.status !== 'Aprobada') return json(response, 409, { error: 'El estado de la solicitud ya cambió.' })
-    const target = await db.get('SELECT id, email, full_name AS "fullName" FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL', requestRecord.userId, user.school_id)
+    const target = await db.get(`SELECT u.id, u.email, u.full_name AS "fullName", s.slug AS "schoolSlug"
+      FROM users u JOIN schools s ON s.id = u.school_id
+      WHERE u.id = ? AND u.school_id = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, requestRecord.userId, user.school_id)
     if (!target) return json(response, 409, { error: 'La cuenta asociada ya no está activa. Rechaza esta solicitud.' })
     const resetCode = randomBytes(24).toString('base64url')
     const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
     await db.run(`UPDATE password_reset_requests SET status = 'Aprobada', reset_token_hash = ?, token_expires_at = ?,
       reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, hashToken(resetCode), expiresAt, user.id, note, requestRecord.id, user.school_id)
-    await logAudit(user.school_id, user.id, action === 'renew' ? 'password_reset_code_renewed' : 'password_reset_request_approved')
-    const resetPage = String(process.env.EDUCA_PUBLIC_URL || '').trim()
-    await sendEmail({ to: target.email, subject: 'EDUCA: código para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Tu código de un solo uso es:\n${resetCode}\n\nVence en 30 minutos. Abre EDUCA, selecciona “Olvidé mi contraseña” e ingresa el mismo colegio y correo de esta cuenta junto con este código.${resetPage ? `\n\nAcceso a EDUCA: ${resetPage}` : ''}\n\nSi no solicitaste este cambio, contacta al colegio y no compartas este código.` })
+    await logAudit(user.school_id, user.id, action === 'renew' ? 'password_reset_link_renewed' : 'password_reset_request_approved')
+    const resetPage = String(process.env.EDUCA_PUBLIC_URL || '').trim().replace(/\/+$/, '')
+    const resetParams = new URLSearchParams({ school: target.schoolSlug, email: target.email, token: resetCode })
+    const resetLink = resetPage ? `${resetPage}/#restablecer?${resetParams.toString()}` : ''
+    await sendEmail({ to: target.email, subject: 'EDUCA: enlace para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Usa este enlace seguro para crear una nueva contraseña:\n${resetLink || 'Solicita a rectoría o administración el enlace de recuperación de EDUCA.'}\n\nEl enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, contacta al colegio. No compartas el enlace.` })
     return json(response, 200, { updated: true, status: 'Aprobada', resetCode, expiresAt })
   }
 
