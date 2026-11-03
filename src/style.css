@@ -419,3 +419,5 @@ html,body,#root,.app-shell{width:100%;max-width:100%;overflow-x:clip}.main-area{
   .certificate-form > label { width: 100%; }
   .certificate-form > .button { width: 100%; min-height: 46px; justify-self: stretch; }
 }
+
+.document-control-number{font-variant-numeric:tabular-nums;letter-spacing:.02em;color:var(--edu-primary,#245985)}.pagination-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--edu-muted,#687b8d);font-size:13px}.pagination-bar>div{display:flex;gap:8px}.document-control-page .students-toolbar{align-items:flex-end}.document-control-page .student-filter{min-width:170px}.document-control-page .student-filter:first-child{flex:1;min-width:250px}

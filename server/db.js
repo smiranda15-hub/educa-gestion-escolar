@@ -65,6 +65,26 @@ export const db = {
   async close() { if (pool) await pool.end(); if (sqlite) sqlite.close() },
 }
 
+export async function nextDocumentNumber(tx, schoolId, documentType, academicYear) {
+  const year = String(academicYear || '').replace(/[^0-9-]/g, '').slice(0, 12) || String(new Date().getFullYear())
+  const row = await tx.get(`INSERT INTO document_control_counters (school_id, document_type, academic_year, last_number)
+    VALUES (?, ?, ?, 1)
+    ON CONFLICT(school_id, document_type, academic_year)
+    DO UPDATE SET last_number = document_control_counters.last_number + 1
+    RETURNING last_number`, schoolId, documentType, year)
+  return `EDU-${documentType}-${year}-${String(row.last_number).padStart(5, '0')}`
+}
+
+export async function registerControlledDocument(tx, document) {
+  await tx.run(`INSERT INTO document_control_registry
+    (id, school_id, document_type, document_number, reference_id, student_id, student_name, academic_year, period, status, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(school_id, document_type, reference_id) DO NOTHING`,
+  randomUUID(), document.schoolId, document.documentType, document.documentNumber, document.referenceId || null,
+  document.studentId || null, document.studentName || '', document.academicYear, document.period || '',
+  document.status || 'Emitido', document.createdBy || null, document.createdAt || new Date().toISOString())
+}
+
 export async function migrate() {
   const textTimestampDefault = usePostgres ? '(CURRENT_TIMESTAMP::text)' : 'CURRENT_TIMESTAMP'
   const blobType = usePostgres ? 'BYTEA' : 'BLOB'
@@ -183,6 +203,7 @@ export async function migrate() {
     CREATE TABLE IF NOT EXISTS enrollment_requests (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
+      document_number TEXT NOT NULL DEFAULT '',
       student_id TEXT REFERENCES students(id),
       student_name TEXT NOT NULL,
       document TEXT NOT NULL,
@@ -204,6 +225,7 @@ export async function migrate() {
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
       student_id TEXT NOT NULL REFERENCES students(id),
+      document_number TEXT NOT NULL DEFAULT '',
       course_id TEXT REFERENCES courses(id),
       academic_year TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('Activa','Trasladada','Retirada')),
@@ -342,11 +364,36 @@ export async function migrate() {
       student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
       academic_year TEXT NOT NULL,
       period TEXT NOT NULL,
+      document_number TEXT NOT NULL DEFAULT '',
       signature_snapshot TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (student_id, academic_year, period)
     );
     CREATE INDEX IF NOT EXISTS report_card_verifications_scope_idx ON report_card_verifications(school_id, academic_year, period);
+    CREATE TABLE IF NOT EXISTS document_control_counters (
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      document_type TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      last_number INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (school_id, document_type, academic_year)
+    );
+    CREATE TABLE IF NOT EXISTS document_control_registry (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      document_type TEXT NOT NULL,
+      document_number TEXT NOT NULL,
+      reference_id TEXT,
+      student_id TEXT REFERENCES students(id) ON DELETE SET NULL,
+      student_name TEXT NOT NULL DEFAULT '',
+      academic_year TEXT NOT NULL,
+      period TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Emitido',
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (school_id, document_type, academic_year, document_number),
+      UNIQUE (school_id, document_type, reference_id)
+    );
+    CREATE INDEX IF NOT EXISTS document_control_registry_scope_idx ON document_control_registry(school_id, document_type, academic_year, created_at);
     CREATE TABLE IF NOT EXISTS work_submissions (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -462,6 +509,7 @@ export async function migrate() {
       grade_snapshot TEXT NOT NULL DEFAULT '',
       course_name_snapshot TEXT NOT NULL DEFAULT '',
       academic_status_snapshot TEXT NOT NULL DEFAULT '',
+      document_number TEXT NOT NULL DEFAULT '',
       certificate_number TEXT NOT NULL UNIQUE,
       verification_code TEXT UNIQUE,
       signature_snapshot TEXT NOT NULL DEFAULT '[]',
@@ -698,6 +746,45 @@ export async function migrate() {
       if (!reportVerificationColumns.some(item => item.name === 'signature_snapshot')) await db.exec("ALTER TABLE report_card_verifications ADD COLUMN signature_snapshot TEXT NOT NULL DEFAULT '[]'")
     }
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 21)
+  }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 22)) {
+    const additions = [
+      ['school_certificates', 'document_number', "TEXT NOT NULL DEFAULT ''"],
+      ['report_card_verifications', 'document_number', "TEXT NOT NULL DEFAULT ''"],
+      ['enrollment_requests', 'document_number', "TEXT NOT NULL DEFAULT ''"],
+      ['student_enrollments', 'document_number', "TEXT NOT NULL DEFAULT ''"],
+    ]
+    for (const [table, column, definition] of additions) {
+      const exists = usePostgres
+        ? await db.get('SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?', table, column)
+        : (await db.all(`PRAGMA table_info(${table})`)).some(item => item.name === column)
+      if (!exists) await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+    }
+    const oldCertificates = await db.all("SELECT id, school_id AS \"schoolId\", student_id AS \"studentId\", student_name AS \"studentName\", academic_year AS \"academicYear\", issued_by AS \"createdBy\", status, created_at AS \"createdAt\" FROM school_certificates WHERE document_number = '' ORDER BY created_at, id")
+    for (const item of oldCertificates) await db.transaction(async tx => {
+      const documentNumber = await nextDocumentNumber(tx, item.schoolId, 'CERT', item.academicYear)
+      await tx.run('UPDATE school_certificates SET document_number = ? WHERE id = ? AND document_number = \'\'', documentNumber, item.id)
+      await registerControlledDocument(tx, { schoolId: item.schoolId, documentType: 'CERT', documentNumber, referenceId: item.id, studentId: item.studentId, studentName: item.studentName, academicYear: item.academicYear, status: item.status, createdBy: item.createdBy, createdAt: item.createdAt })
+    })
+    const oldReports = await db.all("SELECT r.token, r.school_id AS \"schoolId\", r.student_id AS \"studentId\", s.full_name AS \"studentName\", r.academic_year AS \"academicYear\", r.period, r.created_at AS \"createdAt\", CASE WHEN COALESCE(p.is_published, 0) = 1 THEN 'Publicado' ELSE 'Vista previa' END AS status FROM report_card_verifications r JOIN students s ON s.id = r.student_id LEFT JOIN grade_period_publications p ON p.school_id = r.school_id AND p.academic_year = r.academic_year AND p.period = r.period WHERE r.document_number = '' ORDER BY r.created_at, r.token")
+    for (const item of oldReports) await db.transaction(async tx => {
+      const documentNumber = await nextDocumentNumber(tx, item.schoolId, 'BOL', item.academicYear)
+      await tx.run('UPDATE report_card_verifications SET document_number = ? WHERE token = ? AND document_number = \'\'', documentNumber, item.token)
+      await registerControlledDocument(tx, { schoolId: item.schoolId, documentType: 'BOL', documentNumber, referenceId: item.token, studentId: item.studentId, studentName: item.studentName, academicYear: item.academicYear, period: item.period, status: item.status, createdAt: item.createdAt })
+    })
+    const oldEnrollments = await db.all("SELECT se.id, se.school_id AS \"schoolId\", se.student_id AS \"studentId\", st.full_name AS \"studentName\", se.academic_year AS \"academicYear\", se.status, se.created_by AS \"createdBy\", se.created_at AS \"createdAt\" FROM student_enrollments se JOIN students st ON st.id = se.student_id WHERE se.document_number = '' ORDER BY se.created_at, se.id")
+    for (const item of oldEnrollments) await db.transaction(async tx => {
+      const documentNumber = await nextDocumentNumber(tx, item.schoolId, 'MAT', item.academicYear)
+      await tx.run('UPDATE student_enrollments SET document_number = ? WHERE id = ? AND document_number = \'\'', documentNumber, item.id)
+      await registerControlledDocument(tx, { schoolId: item.schoolId, documentType: 'MAT', documentNumber, referenceId: item.id, studentId: item.studentId, studentName: item.studentName, academicYear: item.academicYear, status: item.status, createdBy: item.createdBy, createdAt: item.createdAt })
+    })
+    const oldRequests = await db.all("SELECT id, school_id AS \"schoolId\", student_id AS \"studentId\", student_name AS \"studentName\", academic_year AS \"academicYear\", status, created_by AS \"createdBy\", created_at AS \"createdAt\" FROM enrollment_requests WHERE document_number = '' ORDER BY created_at, id")
+    for (const item of oldRequests) await db.transaction(async tx => {
+      const documentNumber = await nextDocumentNumber(tx, item.schoolId, 'SOLMAT', item.academicYear)
+      await tx.run('UPDATE enrollment_requests SET document_number = ? WHERE id = ? AND document_number = \'\'', documentNumber, item.id)
+      await registerControlledDocument(tx, { schoolId: item.schoolId, documentType: 'SOLMAT', documentNumber, referenceId: item.id, studentId: item.studentId, studentName: item.studentName, academicYear: item.academicYear, status: item.status, createdBy: item.createdBy, createdAt: item.createdAt })
+    })
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 22)
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)

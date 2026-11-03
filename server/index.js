@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { basename, extname, resolve, sep } from 'node:path'
-import { db, logAudit, migrate, databaseType } from './db.js'
+import { db, logAudit, migrate, databaseType, nextDocumentNumber, registerControlledDocument } from './db.js'
 
 const scrypt = promisify(scryptCallback)
 const port = Number(process.env.PORT || process.env.API_PORT || 3001)
@@ -199,7 +199,7 @@ async function route(request, response) {
   if (method === 'GET' && publicVerificationMatch) {
     const [, kind, token] = publicVerificationMatch
     if (kind.toLowerCase() === 'constancia') {
-      const record = await db.get(`SELECT d.status, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
+      const record = await db.get(`SELECT d.status, d.certificate_number AS "certificateNumber", d.document_number AS "documentNumber", d.certificate_type AS "certificateType",
         d.student_name AS "studentName", d.grade, d.course_name_snapshot AS "courseName", d.academic_status_snapshot AS "academicStatusSnapshot", d.academic_year AS "academicYear", d.rector_name AS "rectorName", d.signed_at AS "signedAt",
         s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
         FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.verification_code = ?`, token)
@@ -207,7 +207,7 @@ async function route(request, response) {
       const valid = record.status === 'Emitida' && Boolean(record.signedAt && record.rectorName)
       return json(response, 200, { valid, status: valid ? 'Documento vigente y firmado' : record.status === 'Anulada' ? 'Documento anulado' : record.status === 'Reemplazada' ? 'Documento reemplazado' : 'Documento no vigente', documentKind: 'Constancia', ...record, hasLogo: Boolean(record.hasLogo) })
     }
-    const record = await db.get(`SELECT rv.academic_year AS "academicYear", rv.period, p.is_published AS "isPublished",
+    const record = await db.get(`SELECT rv.document_number AS "documentNumber", rv.academic_year AS "academicYear", rv.period, p.is_published AS "isPublished",
         p.published_at AS "publishedAt", st.full_name AS "studentName", st.grade,
         s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
         FROM report_card_verifications rv JOIN schools s ON s.id = rv.school_id
@@ -525,6 +525,36 @@ async function route(request, response) {
       FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id AND u.school_id = a.school_id
       WHERE ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, ...params, limit, offset)
     return json(response, 200, { entries, total, limit, offset })
+  }
+
+  if (url.pathname === '/api/document-control' && method === 'GET') {
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar el control documental.' })
+    const type = String(url.searchParams.get('type') || '').trim().toUpperCase()
+    const year = String(url.searchParams.get('year') || '').trim()
+    const search = `%${String(url.searchParams.get('search') || '').trim().slice(0, 100)}%`
+    const clauses = ['d.school_id = ?'], params = [user.school_id]
+    if (['CERT', 'BOL', 'MAT', 'SOLMAT'].includes(type)) { clauses.push('d.document_type = ?'); params.push(type) }
+    if (year && /^\d{4}(?:-\d{4})?$/.test(year)) { clauses.push('d.academic_year = ?'); params.push(year) }
+    if (search !== '%%') { clauses.push('(d.document_number LIKE ? OR d.student_name LIKE ? OR d.status LIKE ?)'); params.push(search, search, search) }
+    const where = clauses.join(' AND ')
+    const total = Number((await db.get(`SELECT COUNT(*) AS count FROM document_control_registry d WHERE ${where}`, ...params)).count)
+    const limit = Math.min(250, Math.max(1, Number(url.searchParams.get('limit')) || 100))
+    const offset = Math.min(100_000, Math.max(0, Number(url.searchParams.get('offset')) || 0))
+    const selectRecords = `SELECT d.id, d.document_type AS "documentType", d.document_number AS "documentNumber", d.student_name AS "studentName",
+      d.academic_year AS "academicYear", d.period, d.status, d.created_at AS "createdAt", COALESCE(u.full_name, 'Cuenta eliminada') AS "createdByName"
+      FROM document_control_registry d LEFT JOIN users u ON u.id = d.created_by AND u.school_id = d.school_id
+      WHERE ${where} ORDER BY d.created_at DESC, d.document_number DESC`
+    if (url.searchParams.get('export') === 'csv') {
+      const records = await db.all(`${selectRecords} LIMIT 20000`, ...params)
+      const cell = value => { let text = String(value ?? ''); if (/^[=+@\-\t\r]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"` }
+      const headers = ['Número de control', 'Tipo', 'Estudiante', 'Año lectivo', 'Periodo', 'Estado', 'Fecha y hora', 'Registrado por']
+      const csv = [headers.map(cell).join(','), ...records.map(record => [record.documentNumber, record.documentType, record.studentName, record.academicYear, record.period, record.status, record.createdAt, record.createdByName].map(cell).join(','))].join('\r\n')
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="educa-control-documental.csv"', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+      response.end(`\uFEFF${csv}`)
+      return
+    }
+    const records = await db.all(`${selectRecords} LIMIT ? OFFSET ?`, ...params, limit, offset)
+    return json(response, 200, { records, total, limit, offset })
   }
 
   if (url.pathname === '/api/audit-log/export' && method === 'GET') {
@@ -1426,7 +1456,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
     const linkedOnly = ['acudiente', 'estudiante'].includes(user.role)
     const history = await db.all(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
-      d.student_id AS "studentId", d.student_name AS "studentName", d.student_document_type AS "studentDocumentType", d.student_document_number AS "studentDocumentNumber", d.student_document_issued_place AS "studentDocumentIssuedPlace", d.requester_name AS "requesterName", d.requester_role AS "requesterRole", d.grade, d.course_name_snapshot AS "courseNameSnapshot", d.academic_status_snapshot AS "academicStatusSnapshot", d.academic_year AS "academicYear", d.created_at AS "issuedAt", s.name AS "schoolName",
+      d.student_id AS "studentId", d.student_name AS "studentName", d.student_document_type AS "studentDocumentType", d.student_document_number AS "studentDocumentNumber", d.student_document_issued_place AS "studentDocumentIssuedPlace", d.requester_name AS "requesterName", d.requester_role AS "requesterRole", d.grade, d.course_name_snapshot AS "courseNameSnapshot", d.academic_status_snapshot AS "academicStatusSnapshot", d.document_number AS "documentNumber", d.academic_year AS "academicYear", d.created_at AS "issuedAt", s.name AS "schoolName",
       d.status, d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.annul_note AS "annulNote"
       FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.school_id = ? ${linkedOnly ? "AND d.status = 'Emitida' AND EXISTS (SELECT 1 FROM user_students us WHERE us.user_id = ? AND us.student_id = d.student_id)" : "AND d.status <> 'Anulada'"}
       ORDER BY d.created_at DESC LIMIT 100`, ...(linkedOnly ? [user.school_id, user.id] : [user.school_id]))
@@ -1436,7 +1466,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   if (certificateMatch && method === 'GET') {
     if (![...certificateRoles, 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar constancias.' })
     const certificate = await db.get(`SELECT d.id, d.certificate_number AS "certificateNumber", d.certificate_type AS "certificateType",
-      d.student_id AS "studentId", d.student_name AS "studentName", d.student_document_type AS "studentDocumentType", d.student_document_number AS "studentDocumentNumber", d.student_document_issued_place AS "studentDocumentIssuedPlace", d.requester_name AS "requesterName", d.requester_role AS "requesterRole", d.grade, d.course_name_snapshot AS "courseNameSnapshot", d.academic_status_snapshot AS "academicStatusSnapshot", d.academic_year AS "academicYear", d.created_at AS "issuedAt",
+      d.student_id AS "studentId", d.student_name AS "studentName", d.student_document_type AS "studentDocumentType", d.student_document_number AS "studentDocumentNumber", d.student_document_issued_place AS "studentDocumentIssuedPlace", d.requester_name AS "requesterName", d.requester_role AS "requesterRole", d.grade, d.course_name_snapshot AS "courseNameSnapshot", d.academic_status_snapshot AS "academicStatusSnapshot", d.document_number AS "documentNumber", d.academic_year AS "academicYear", d.created_at AS "issuedAt",
       d.rector_name AS "rectorName", d.signed_at AS "signedAt", d.status, d.verification_code AS "verificationCode", d.signature_snapshot AS "signatureSnapshot",
       s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo", s.address, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone"
       FROM school_certificates d JOIN schools s ON s.id = d.school_id WHERE d.id = ? AND d.school_id = ? AND d.status = 'Emitida'`, certificateMatch[1], user.school_id)
@@ -1521,15 +1551,19 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
             // when no separate student_enrollments row exists for that year.
             const prior = current.replaces_certificate_id ? await tx.get("SELECT id FROM school_certificates WHERE id = ? AND school_id = ? AND status = 'Emitida'", current.replaces_certificate_id, user.school_id) : null
             if (current.replaces_certificate_id && !prior) throw Object.assign(new Error('La constancia que se quería corregir ya no está vigente.'), { status: 409 })
-            const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`, verificationCode = randomUUID()
+            const issuedAt = new Date().toISOString(), certificateNumber = await nextDocumentNumber(tx, user.school_id, 'CERT', current.academic_year), verificationCode = randomUUID()
             const signatureSnapshot = await resolveDocumentSigners(user.school_id, current.certificate_type === 'Certificado académico' ? 'academic_certificate' : 'study_certificate')
             if (!signatureSnapshot.length) signatureSnapshot.push({ fullName: user.full_name, positionTitle: 'Rector(a)', signature: null })
             const rectorName = signatureSnapshot[0]?.fullName || user.full_name
             const requester = await tx.get('SELECT full_name AS "requesterName" FROM users WHERE id = ? AND school_id = ?', current.requested_by, user.school_id)
             certificateId = randomUUID()
-            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, enrollment_id, course_id, grade_snapshot, course_name_snapshot, academic_status_snapshot, certificate_number, verification_code, signature_snapshot, certificate_type, student_name, student_document_type, student_document_number, student_document_issued_place, requester_name, requester_role, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, current.enrollment_id || null, current.course_id || null, current.grade_snapshot || student.grade, current.course_name_snapshot || '', current.academic_status_snapshot || '', certificateNumber, verificationCode, JSON.stringify(signatureSnapshot), current.certificate_type, student.name, student.documentType, student.document, student.documentIssuedPlace, requester?.requesterName || '', current.requester_role || '', current.grade_snapshot || student.grade, current.academic_year, user.id, user.id, rectorName, issuedAt)
-            if (prior) await tx.run("UPDATE school_certificates SET status = 'Reemplazada', replaced_by_id = ? WHERE id = ? AND school_id = ?", certificateId, prior.id, user.school_id)
+            await tx.run(`INSERT INTO school_certificates (id, school_id, student_id, enrollment_id, course_id, grade_snapshot, course_name_snapshot, academic_status_snapshot, document_number, certificate_number, verification_code, signature_snapshot, certificate_type, student_name, student_document_type, student_document_number, student_document_issued_place, requester_name, requester_role, grade, academic_year, issued_by, status, rector_user_id, rector_name, signed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida', ?, ?, ?)`, certificateId, user.school_id, current.student_id, current.enrollment_id || null, current.course_id || null, current.grade_snapshot || student.grade, current.course_name_snapshot || '', current.academic_status_snapshot || '', certificateNumber, certificateNumber, verificationCode, JSON.stringify(signatureSnapshot), current.certificate_type, student.name, student.documentType, student.document, student.documentIssuedPlace, requester?.requesterName || '', current.requester_role || '', current.grade_snapshot || student.grade, current.academic_year, user.id, user.id, rectorName, issuedAt)
+            if (prior) {
+              await tx.run("UPDATE school_certificates SET status = 'Reemplazada', replaced_by_id = ? WHERE id = ? AND school_id = ?", certificateId, prior.id, user.school_id)
+              await tx.run("UPDATE document_control_registry SET status = 'Reemplazada' WHERE school_id = ? AND document_type = 'CERT' AND reference_id = ?", user.school_id, prior.id)
+            }
+            await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'CERT', documentNumber: certificateNumber, referenceId: certificateId, studentId: current.student_id, studentName: student.name, academicYear: current.academic_year, status: 'Emitida', createdBy: user.id, createdAt: issuedAt })
             issuedCertificate = { id: certificateId, certificateNumber }
           }
           await tx.run('UPDATE school_certificate_requests SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND school_id = ?', decision, note, user.id, new Date().toISOString(), id, user.school_id)
@@ -1580,6 +1614,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (reason.length < 3 || reason.length > 500) return json(response, 400, { error: 'Indica el motivo de anulación.' })
     const result = await db.run("UPDATE school_certificates SET status = 'Anulada', annul_note = ?, annulled_by = ?, annulled_at = ? WHERE id = ? AND school_id = ? AND status = 'Emitida'", reason, user.id, new Date().toISOString(), certificateMatch[1], user.school_id)
     if (!result.changes && !result.rowCount) return json(response, 404, { error: 'No encontramos una constancia vigente para anular.' })
+    await db.run("UPDATE document_control_registry SET status = 'Anulada' WHERE school_id = ? AND document_type = 'CERT' AND reference_id = ?", user.school_id, certificateMatch[1])
     await logAudit(user.school_id, user.id, 'school_certificate_annulled')
     return json(response, 200, { status: 'Anulada' })
   }
@@ -2162,6 +2197,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       ON CONFLICT(school_id, academic_year, period) DO UPDATE SET is_published = excluded.is_published,
         published_by = excluded.published_by, published_at = excluded.published_at`,
       publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
+    await db.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
+      body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
     let notified = 0
     if (body.published && !previousPublication?.isPublished) {
       const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
@@ -2246,10 +2283,25 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         assessments: summary.assessments,
       }
     })
-    await db.run(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period)
-      VALUES (?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING`, randomUUID(), user.school_id, student.id, academicYear, period)
     const currentSignatures = await resolveDocumentSigners(user.school_id, 'report_card', reportCourse?.id || null)
-    const verification = await db.get('SELECT token, signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+    const verification = await db.transaction(async tx => {
+      let record = await tx.get('SELECT token, document_number AS "documentNumber", signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+      if (!record) {
+        const token = randomUUID()
+        const documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
+        const inserted = await tx.get(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period, document_number)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING RETURNING token`, token, user.school_id, student.id, academicYear, period, documentNumber)
+        record = await tx.get('SELECT token, document_number AS "documentNumber", signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
+        if (inserted) await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber, referenceId: token, studentId: student.id, studentName: student.name, academicYear, period, status: publication?.isPublished ? 'Publicado' : 'Vista previa', createdBy: user.id })
+      }
+      if (!record.documentNumber) {
+        record.documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
+        await tx.run('UPDATE report_card_verifications SET document_number = ? WHERE token = ?', record.documentNumber, record.token)
+        await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber: record.documentNumber, referenceId: record.token, studentId: student.id, studentName: student.name, academicYear, period, status: publication?.isPublished ? 'Publicado' : 'Vista previa', createdBy: user.id })
+      }
+      await tx.run('UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = \'BOL\' AND reference_id = ?', publication?.isPublished ? 'Publicado' : 'Vista previa', user.school_id, record.token)
+      return record
+    })
     if ((!verification.signatureSnapshot || verification.signatureSnapshot === '[]') && currentSignatures.length) {
       await db.run('UPDATE report_card_verifications SET signature_snapshot = ? WHERE token = ? AND (signature_snapshot IS NULL OR signature_snapshot = \'[]\')', JSON.stringify(currentSignatures), verification.token)
       verification.signatureSnapshot = JSON.stringify(currentSignatures)
@@ -2258,7 +2310,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     try { reportSignatures = JSON.parse(verification.signatureSnapshot || '[]') } catch { reportSignatures = currentSignatures }
     const reportSchool = await db.get('SELECT name, slug, address, contact_email AS "contactEmail", contact_phone AS "contactPhone", primary_color AS "primaryColor", logo_content_type AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
+    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, documentNumber: verification.documentNumber, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
@@ -2505,7 +2557,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar matrículas.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
     const status = String(url.searchParams.get('status') || 'Todos')
-    const requests = await db.all(`SELECT id, student_id AS "studentId", student_name AS "studentName", document,
+    const requests = await db.all(`SELECT id, student_id AS "studentId", student_name AS "studentName", document, document_number AS "documentNumber",
       grade_requested AS "gradeRequested", academic_year AS "academicYear", guardian_name AS "guardianName",
       guardian_phone AS "guardianPhone", pending_documents AS "pendingDocuments", notes, status,
       created_at AS "createdAt", updated_at AS "updatedAt"
@@ -2531,11 +2583,16 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       AND status IN ('Solicitada','En revisión','Pendiente documentos','Aprobada')`, user.school_id, document, academicYear)
     if (duplicate) return json(response, 409, { error: 'Ya existe una solicitud en curso para ese documento y año lectivo.' })
     const id = randomUUID()
-    await db.run(`INSERT INTO enrollment_requests (id, school_id, student_name, document, grade_requested, academic_year,
-      guardian_name, guardian_phone, pending_documents, notes, status, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Solicitada', ?, ?)`, id, user.school_id, studentName, document, gradeRequested, academicYear, guardianName, guardianPhone, pendingDocuments, notes, user.id, user.id)
+    const documentNumber = await db.transaction(async tx => {
+      const controlledNumber = await nextDocumentNumber(tx, user.school_id, 'SOLMAT', academicYear)
+      await tx.run(`INSERT INTO enrollment_requests (id, school_id, student_name, document, document_number, grade_requested, academic_year,
+        guardian_name, guardian_phone, pending_documents, notes, status, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Solicitada', ?, ?)`, id, user.school_id, studentName, document, controlledNumber, gradeRequested, academicYear, guardianName, guardianPhone, pendingDocuments, notes, user.id, user.id)
+      await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'SOLMAT', documentNumber: controlledNumber, referenceId: id, studentName, academicYear, status: 'Solicitada', createdBy: user.id })
+      return controlledNumber
+    })
     await logAudit(user.school_id, user.id, 'enrollment_request_created')
-    return json(response, 201, { id, status: 'Solicitada' })
+    return json(response, 201, { id, documentNumber, status: 'Solicitada' })
   }
   const enrollmentRequestMatch = url.pathname.match(/^\/api\/enrollments\/([0-9a-f-]{36})$/i)
   if (enrollmentRequestMatch && method === 'PATCH') {
@@ -2554,6 +2611,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (status !== 'Aprobada') {
       await db.run(`UPDATE enrollment_requests SET status = ?, pending_documents = ?, notes = ?, updated_by = ?, updated_at = ?
         WHERE id = ? AND school_id = ?`, status, pendingDocuments, notes, user.id, new Date().toISOString(), id, user.school_id)
+      await db.run('UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = \'SOLMAT\' AND reference_id = ?', status, user.school_id, id)
       await logAudit(user.school_id, user.id, 'enrollment_request_updated')
       return json(response, 200, { id, status })
     }
@@ -2564,22 +2622,26 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (await db.get("SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'", user.school_id, studentId, requestRecord.academic_year)) return json(response, 409, { error: 'El estudiante ya tiene una matrícula activa para ese año lectivo.' })
     const enrollmentId = randomUUID()
     const today = new Date().toISOString().slice(0, 10)
-    await db.transaction(async tx => {
+    const enrollmentDocumentNumber = await db.transaction(async tx => {
       if (student) await tx.run(`UPDATE students SET full_name = ?, grade = ?, guardian_name = ?, guardian_phone = ?, status = 'Activo'
         WHERE id = ? AND school_id = ?`, requestRecord.student_name, requestRecord.grade_requested, requestRecord.guardian_name, requestRecord.guardian_phone, studentId, user.school_id)
       else await tx.run(`INSERT INTO students (id, school_id, full_name, document, grade, guardian_name, guardian_phone, status, card_code)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'Activo', ?)`, studentId, user.school_id, requestRecord.student_name, requestRecord.document, requestRecord.grade_requested, requestRecord.guardian_name, requestRecord.guardian_phone, randomUUID())
-      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, status, start_date, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, enrollmentId, user.school_id, studentId, course.id, requestRecord.academic_year, today, notes, user.id)
+      const controlledNumber = await nextDocumentNumber(tx, user.school_id, 'MAT', requestRecord.academic_year)
+      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, document_number, status, start_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, enrollmentId, user.school_id, studentId, course.id, requestRecord.academic_year, controlledNumber, today, notes, user.id)
+      await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'MAT', documentNumber: controlledNumber, referenceId: enrollmentId, studentId, studentName: requestRecord.student_name, academicYear: requestRecord.academic_year, status: 'Activa', createdBy: user.id })
       await tx.run(`UPDATE enrollment_requests SET student_id = ?, status = 'Aprobada', pending_documents = ?, notes = ?, updated_by = ?, updated_at = ?
         WHERE id = ? AND school_id = ?`, studentId, pendingDocuments, notes, user.id, new Date().toISOString(), id, user.school_id)
+      await tx.run("UPDATE document_control_registry SET student_id = ?, status = 'Aprobada' WHERE school_id = ? AND document_type = 'SOLMAT' AND reference_id = ?", studentId, user.school_id, id)
+      return controlledNumber
     })
     await logAudit(user.school_id, user.id, 'enrollment_approved')
-    return json(response, 200, { id, studentId, enrollmentId, status: 'Aprobada' })
+    return json(response, 200, { id, studentId, enrollmentId, documentNumber: enrollmentDocumentNumber, status: 'Aprobada' })
   }
   if (url.pathname === '/api/enrollments/history' && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar historial de matrículas.' })
-    const records = await db.all(`SELECT se.id, se.student_id AS "studentId", st.full_name AS "studentName", st.document,
+    const records = await db.all(`SELECT se.id, se.student_id AS "studentId", st.full_name AS "studentName", st.document, se.document_number AS "documentNumber",
       st.grade, se.course_id AS "courseId", c.name AS "courseName", se.academic_year AS "academicYear",
       se.status, se.start_date AS "startDate", se.end_date AS "endDate", se.notes
       FROM student_enrollments se JOIN students st ON st.id = se.student_id
@@ -2603,14 +2665,19 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!destination || destination.academicYear !== current.academicYear) return json(response, 400, { error: 'El curso destino debe estar activo y pertenecer al mismo año lectivo.' })
     if (destination.id === current.courseId) return json(response, 400, { error: 'Selecciona un curso distinto al actual.' })
     const newEnrollmentId = randomUUID()
-    await db.transaction(async tx => {
+    const documentNumber = await db.transaction(async tx => {
       await tx.run(`UPDATE student_enrollments SET status = 'Trasladada', end_date = ?, notes = ? WHERE id = ? AND school_id = ?`, effectiveDate, notes, current.id, user.school_id)
-      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, status, start_date, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, newEnrollmentId, user.school_id, current.studentId, destination.id, current.academicYear, effectiveDate, notes, user.id)
+      await tx.run("UPDATE document_control_registry SET status = 'Trasladada' WHERE school_id = ? AND document_type = 'MAT' AND reference_id = ?", user.school_id, current.id)
+      const controlledNumber = await nextDocumentNumber(tx, user.school_id, 'MAT', current.academicYear)
+      const studentName = (await tx.get('SELECT full_name AS "fullName" FROM students WHERE id = ? AND school_id = ?', current.studentId, user.school_id))?.fullName || ''
+      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, document_number, status, start_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, newEnrollmentId, user.school_id, current.studentId, destination.id, current.academicYear, controlledNumber, effectiveDate, notes, user.id)
+      await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'MAT', documentNumber: controlledNumber, referenceId: newEnrollmentId, studentId: current.studentId, studentName, academicYear: current.academicYear, status: 'Activa', createdBy: user.id })
       await tx.run('UPDATE students SET grade = ? WHERE id = ? AND school_id = ?', destination.grade, current.studentId, user.school_id)
+      return controlledNumber
     })
     await logAudit(user.school_id, user.id, 'student_transferred')
-    return json(response, 200, { enrollmentId: newEnrollmentId, transferred: true })
+    return json(response, 200, { enrollmentId: newEnrollmentId, documentNumber, transferred: true })
   }
 
   if (url.pathname === '/api/students' && method === 'GET') {
