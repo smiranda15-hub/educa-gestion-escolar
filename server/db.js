@@ -130,6 +130,26 @@ export async function migrate() {
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       UNIQUE (school_id, document)
     );
+    CREATE TABLE IF NOT EXISTS student_payment_records (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id),
+      student_id TEXT NOT NULL REFERENCES students(id),
+      academic_year TEXT NOT NULL,
+      fee_type TEXT NOT NULL CHECK (fee_type IN ('Matrícula','Pensión')),
+      billing_period TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL CHECK (amount >= 0),
+      due_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Pendiente' CHECK (status IN ('Pendiente','Pagado','Exonerado')),
+      paid_at TEXT,
+      payment_reference TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      updated_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (student_id, academic_year, fee_type, billing_period)
+    );
+    CREATE INDEX IF NOT EXISTS student_payment_records_scope_idx ON student_payment_records(school_id, student_id, academic_year, status);
     CREATE TABLE IF NOT EXISTS user_students (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
@@ -461,6 +481,12 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS academic_periods_school_year_idx ON academic_periods(school_id, academic_year, is_active);
   `)
   if (usePostgres) {
+    for (const [column, definition] of [['is_active', 'INTEGER NOT NULL DEFAULT 1'], ['suspension_reason', "TEXT NOT NULL DEFAULT ''"], ['suspended_at', 'TEXT'], ['archived_at', 'TEXT']]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'schools' AND column_name = ?", column)) await db.exec(`ALTER TABLE schools ADD COLUMN ${column} ${definition}`)
+    }
+    for (const [column, definition] of [['access_status', "TEXT NOT NULL DEFAULT 'Activo'"], ['access_suspension_reason', "TEXT NOT NULL DEFAULT ''"], ['access_suspended_at', 'TEXT'], ['access_suspended_by', 'TEXT']]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
+    }
     for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BYTEA']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
@@ -489,6 +515,14 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
   } else {
+    const schoolLifecycleColumns = await db.all('PRAGMA table_info(schools)')
+    for (const [column, definition] of [['is_active', 'INTEGER NOT NULL DEFAULT 1'], ['suspension_reason', "TEXT NOT NULL DEFAULT ''"], ['suspended_at', 'TEXT'], ['archived_at', 'TEXT']]) {
+      if (!schoolLifecycleColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE schools ADD COLUMN ${column} ${definition}`)
+    }
+    const studentAccessColumns = await db.all('PRAGMA table_info(students)')
+    for (const [column, definition] of [['access_status', "TEXT NOT NULL DEFAULT 'Activo'"], ['access_suspension_reason', "TEXT NOT NULL DEFAULT ''"], ['access_suspended_at', 'TEXT'], ['access_suspended_by', 'TEXT']]) {
+      if (!studentAccessColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
+    }
     const studentColumns = await db.all('PRAGMA table_info(students)')
     for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB']]) {
       if (!studentColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
@@ -549,6 +583,7 @@ export async function migrate() {
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 18)
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 19)
+  await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 20)
 }
 
 export async function logAudit(schoolId, actorUserId, action) {

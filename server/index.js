@@ -107,7 +107,8 @@ const getSession = async request => {
   return db.get(`SELECT u.id, u.school_id, u.email, u.full_name, u.role, s.name AS school_name, s.slug AS school_slug,
       s.primary_color AS school_primary_color, s.logo_content_type AS school_logo_content_type
     FROM sessions x JOIN users u ON x.user_id = u.id JOIN schools s ON s.id = u.school_id
-    WHERE x.token_hash = ? AND x.expires_at > ? AND u.is_active = 1 AND u.deleted_at IS NULL`, hashToken(token), Date.now())
+    WHERE x.token_hash = ? AND x.expires_at > ? AND u.is_active = 1 AND u.deleted_at IS NULL AND s.is_active = 1 AND s.archived_at IS NULL
+      AND (u.role <> 'estudiante' OR NOT EXISTS (SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id WHERE us.user_id = u.id AND us.relationship = 'estudiante' AND st.access_status = 'Suspendido'))`, hashToken(token), Date.now())
 }
 const sessionCookie = (token, maxAge) => `educa_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secureCookie}`
 const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug, primaryColor: user.school_primary_color || '#6c70df', hasLogo: Boolean(user.school_logo_content_type) } })
@@ -131,7 +132,7 @@ async function route(request, response) {
     return
   }
   if (method === 'GET' && url.pathname === '/api/schools') {
-    const schools = await db.all('SELECT id, slug, name, primary_color AS "primaryColor", logo_content_type AS "logoContentType" FROM schools ORDER BY name')
+    const schools = await db.all('SELECT id, slug, name, primary_color AS "primaryColor", logo_content_type AS "logoContentType" FROM schools WHERE is_active = 1 AND archived_at IS NULL ORDER BY name')
     for (const school of schools) school.hasLogo = Boolean(school.logoContentType), delete school.logoContentType
     return json(response, 200, { schools })
   }
@@ -140,6 +141,8 @@ async function route(request, response) {
     if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para administrar varias instituciones.' })
     const institutions = await db.all(`SELECT s.id, s.slug, s.name, s.contact_email AS "contactEmail", s.contact_phone AS "contactPhone", s.address,
       s.primary_color AS "primaryColor", CASE WHEN s.logo_content_type IS NULL THEN 0 ELSE 1 END AS "hasLogo",
+      CASE WHEN s.archived_at IS NOT NULL THEN 'Archivada' WHEN s.is_active = 0 THEN 'Suspendida' ELSE 'Activa' END AS status,
+      s.suspension_reason AS "suspensionReason", s.suspended_at AS "suspendedAt",
       (SELECT COUNT(*) FROM users u WHERE u.school_id = s.id AND u.role = 'admin' AND u.is_active = 1 AND u.deleted_at IS NULL) AS "activeAdmins"
       FROM schools s ORDER BY s.name`)
     return json(response, 200, { institutions })
@@ -212,6 +215,43 @@ async function route(request, response) {
     })
     return json(response, 200, { institution: { id: school.id, slug: school.slug, name, contactEmail, contactPhone, address, primaryColor: primaryColor.toLowerCase(), hasLogo: body.removeLogo === true ? Boolean(logo) : Boolean(logo || school.logoContentType) } })
   }
+  const institutionLifecycleMatch = url.pathname.match(/^\/api\/institutions\/([0-9a-f-]{36})\/status$/i)
+  if (institutionLifecycleMatch && method === 'PATCH') {
+    const user = await getSession(request)
+    if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para cambiar el estado de las instituciones.' })
+    const body = await readBody(request), institutionId = institutionLifecycleMatch[1]
+    const institution = await db.get('SELECT id, is_active AS "isActive", archived_at AS "archivedAt" FROM schools WHERE id = ?', institutionId)
+    if (!institution) return json(response, 404, { error: 'No encontramos esa institución.' })
+    if (institution.id === user.school_id && body.action !== 'reactivate') return json(response, 400, { error: 'No puedes suspender ni archivar la institución de la sesión con la que administras la plataforma.' })
+    const action = String(body.action || '')
+    const reason = String(body.reason || '').trim()
+    if (action === 'suspend') {
+      if (reason.length < 5 || reason.length > 240) return json(response, 400, { error: 'Escribe un motivo de suspensión de 5 a 240 caracteres.' })
+      await db.run('UPDATE schools SET is_active = 0, suspension_reason = ?, suspended_at = CURRENT_TIMESTAMP WHERE id = ?', reason, institutionId)
+      await db.run('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE school_id = ?)', institutionId)
+      await db.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', institutionId, user.id, 'institution_suspended')
+      return json(response, 200, { updated: true, status: 'Suspendida', suspensionReason: reason })
+    }
+    if (action === 'reactivate') {
+      if (institution.archivedAt) return json(response, 409, { error: 'Primero restaura la institución archivada.' })
+      await db.run('UPDATE schools SET is_active = 1, suspension_reason = \'\', suspended_at = NULL WHERE id = ?', institutionId)
+      await db.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', institutionId, user.id, 'institution_reactivated')
+      return json(response, 200, { updated: true, status: 'Activa', suspensionReason: '' })
+    }
+    if (action === 'archive') {
+      if (reason.length < 5 || reason.length > 240) return json(response, 400, { error: 'Escribe un motivo para archivar esta institución.' })
+      await db.run('UPDATE schools SET is_active = 0, suspension_reason = ?, suspended_at = CURRENT_TIMESTAMP, archived_at = CURRENT_TIMESTAMP WHERE id = ?', reason, institutionId)
+      await db.run('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE school_id = ?)', institutionId)
+      await db.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', institutionId, user.id, 'institution_archived')
+      return json(response, 200, { updated: true, status: 'Archivada', suspensionReason: reason })
+    }
+    if (action === 'restore') {
+      await db.run('UPDATE schools SET archived_at = NULL, is_active = 1, suspension_reason = \'\', suspended_at = NULL WHERE id = ?', institutionId)
+      await db.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', institutionId, user.id, 'institution_restored')
+      return json(response, 200, { updated: true, status: 'Activa', suspensionReason: '' })
+    }
+    return json(response, 400, { error: 'Acción de institución no válida.' })
+  }
   if (method === 'POST' && url.pathname === '/api/auth/setup') {
     if (Number((await db.get('SELECT COUNT(*) AS count FROM users')).count) !== 0) return json(response, 409, { error: 'La configuración inicial ya se completó.' })
     const body = await readBody(request)
@@ -245,7 +285,7 @@ async function route(request, response) {
     const email = String(body.email || '').trim().toLowerCase()
     const user = await db.get(`SELECT u.*, s.name AS school_name, s.slug AS school_slug,
       s.primary_color AS school_primary_color, s.logo_content_type AS school_logo_content_type FROM users u JOIN schools s ON s.id = u.school_id
-      WHERE s.slug = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
+      WHERE s.slug = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL AND s.is_active = 1 AND s.archived_at IS NULL`, slug, email)
     const matched = await verifyPassword(String(body.password || ''), user?.password_hash || '00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000')
     if (!user || !matched) {
       attempts.count += 1
@@ -253,6 +293,7 @@ async function route(request, response) {
       loginAttempts.set(address, attempts)
       return json(response, 401, { error: 'No pudimos validar esos datos. Revisa el colegio, el correo y la contraseña.' })
     }
+    if (user.role === 'estudiante' && await db.get("SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND us.relationship = 'estudiante' AND st.access_status = 'Suspendido' LIMIT 1", user.id)) return json(response, 403, { error: 'El acceso a la cuenta del estudiante está temporalmente suspendido. Comunícate con la administración del colegio.' })
     loginAttempts.delete(address)
     await db.run('DELETE FROM sessions WHERE expires_at <= ?', Date.now())
     const token = randomBytes(32).toString('base64url')
@@ -2171,10 +2212,10 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/students' && method === 'GET') {
-    if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'El acceso a la lista completa de estudiantes está limitado a administración y secretaría.' })
+    if (!['admin', 'secretaria', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'El acceso a la lista completa de estudiantes está limitado a administración, secretaría y rectoría.' })
     const search = `%${String(url.searchParams.get('search') || '').slice(0, 100)}%`
     const status = url.searchParams.get('status') || 'Todos'
-    const students = await db.all(`SELECT id, (photo_data IS NOT NULL) AS "hasPhoto", full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt"
+    const students = await db.all(`SELECT id, (photo_data IS NOT NULL) AS "hasPhoto", full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, access_status AS "accessStatus", access_suspension_reason AS "accessSuspensionReason", created_at AS "createdAt"
       FROM students WHERE school_id = ? AND (full_name LIKE ? OR document LIKE ? OR grade LIKE ? OR guardian_name LIKE ?)
       AND (? = 'Todos' OR status = ?) ORDER BY created_at DESC LIMIT 500`, user.school_id, search, search, search, search, status, status)
     return json(response, 200, { students })
@@ -2201,7 +2242,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     await logAudit(user.school_id, user.id, 'student_created')
     return json(response, 201, { student: await db.get('SELECT id, (photo_data IS NOT NULL) AS "hasPhoto", full_name AS name, document, grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt" FROM students WHERE id = ?', id) })
   }
-  const studentMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})$/i)
+    const studentMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})$/i)
   if (studentMatch && method === 'PATCH') {
     if (!['admin', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para modificar estudiantes.' })
     const id = studentMatch[1]
@@ -2237,6 +2278,83 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     })
     await logAudit(user.school_id, user.id, 'student_deleted')
     return json(response, 200, { deleted: true })
+  }
+  const studentAccessMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})\/access$/i)
+  if (studentAccessMatch && method === 'PATCH') {
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo rectoría o administración pueden suspender el acceso de un estudiante.' })
+    const id = studentAccessMatch[1]
+    const body = await readBody(request)
+    const accessStatus = String(body.accessStatus || '')
+    const reason = String(body.reason || '').trim()
+    const academicYear = String(body.academicYear || '')
+    const student = await db.get('SELECT id, access_status AS "accessStatus" FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
+    if (!student) return json(response, 404, { error: 'No encontramos ese estudiante en este colegio.' })
+    if (!['Activo', 'Suspendido'].includes(accessStatus)) return json(response, 400, { error: 'Estado de acceso no válido.' })
+    if (accessStatus === 'Suspendido' && (reason.length < 5 || reason.length > 240)) return json(response, 400, { error: 'Escribe un motivo de suspensión de 5 a 240 caracteres.' })
+    if (accessStatus === 'Suspendido') {
+      if (!/^\d{4}-\d{4}$/.test(academicYear) || Number(academicYear.slice(5)) !== Number(academicYear.slice(0, 4)) + 1) return json(response, 400, { error: 'Selecciona un año lectivo válido para comprobar el saldo.' })
+      const pendingPayment = await db.get("SELECT id FROM student_payment_records WHERE student_id = ? AND school_id = ? AND academic_year = ? AND status = 'Pendiente' LIMIT 1", id, user.school_id, academicYear)
+      if (!pendingPayment) return json(response, 409, { error: 'No se puede suspender el acceso: el estudiante no tiene cobros pendientes registrados para ese año lectivo.' })
+    }
+    await db.run('UPDATE students SET access_status = ?, access_suspension_reason = ?, access_suspended_at = ?, access_suspended_by = ? WHERE id = ? AND school_id = ?', accessStatus, accessStatus === 'Suspendido' ? reason : '', accessStatus === 'Suspendido' ? new Date().toISOString() : null, accessStatus === 'Suspendido' ? user.id : null, id, user.school_id)
+    if (accessStatus === 'Suspendido') await db.run("DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM user_students WHERE student_id = ? AND relationship = 'estudiante')", id)
+    await logAudit(user.school_id, user.id, accessStatus === 'Suspendido' ? 'student_access_suspended' : 'student_access_reactivated')
+    return json(response, 200, { updated: true, accessStatus, reason: accessStatus === 'Suspendido' ? reason : '' })
+  }
+  if (url.pathname === '/api/student-payments' && method === 'GET') {
+    if (!['admin', 'rectoria', 'tesoreria'].includes(user.role)) return json(response, 403, { error: 'Los pagos solo están disponibles para administración, rectoría y tesorería.' })
+    const academicYear = String(url.searchParams.get('academicYear') || '').slice(0, 9)
+    const payments = await db.all(`SELECT p.id, p.student_id AS "studentId", st.full_name AS "studentName", st.document, st.grade,
+      p.academic_year AS "academicYear", p.fee_type AS "feeType", p.billing_period AS "billingPeriod", p.amount, p.due_date AS "dueDate",
+      p.status, p.paid_at AS "paidAt", p.payment_reference AS "paymentReference", p.notes, p.created_at AS "createdAt"
+      FROM student_payment_records p JOIN students st ON st.id = p.student_id
+      WHERE p.school_id = ? AND (? = '' OR p.academic_year = ?) ORDER BY CASE p.status WHEN 'Pendiente' THEN 0 ELSE 1 END, p.due_date, st.full_name`, user.school_id, academicYear, academicYear)
+    const students = await db.all(`SELECT st.id, st.full_name AS name, st.document, st.grade, st.status,
+      st.access_status AS "accessStatus", st.access_suspension_reason AS "accessSuspensionReason",
+      COALESCE(SUM(CASE WHEN p.status = 'Pendiente' THEN p.amount ELSE 0 END), 0) AS "pendingBalance",
+      COALESCE(SUM(CASE WHEN p.status = 'Pendiente' THEN 1 ELSE 0 END), 0) AS "pendingItems"
+      FROM students st LEFT JOIN student_payment_records p ON p.student_id = st.id AND p.school_id = st.school_id AND (? = '' OR p.academic_year = ?)
+      WHERE st.school_id = ? AND st.status = 'Activo' GROUP BY st.id, st.full_name, st.document, st.grade, st.status, st.access_status, st.access_suspension_reason ORDER BY st.full_name`, academicYear, academicYear, user.school_id)
+    return json(response, 200, { payments, students })
+  }
+  if (url.pathname === '/api/student-payments' && method === 'POST') {
+    if (!['admin', 'rectoria', 'tesoreria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para registrar pagos.' })
+    const body = await readBody(request)
+    const studentId = String(body.studentId || '')
+    const academicYear = String(body.academicYear || '')
+    const feeType = String(body.feeType || '')
+    const billingPeriod = String(body.billingPeriod || '').trim()
+    const amount = Number(body.amount)
+    const dueDate = String(body.dueDate || '')
+    const status = String(body.status || 'Pendiente')
+    const paidAt = String(body.paidAt || '')
+    const paymentReference = String(body.paymentReference || '').trim()
+    const notes = String(body.notes || '').trim()
+    const student = await db.get("SELECT id FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)
+    if (!student) return json(response, 404, { error: 'Selecciona un estudiante activo de este colegio.' })
+    if (!/^\d{4}-\d{4}$/.test(academicYear) || Number(academicYear.slice(5)) !== Number(academicYear.slice(0, 4)) + 1) return json(response, 400, { error: 'El año lectivo debe tener formato 2026-2027.' })
+    if (!['Matrícula', 'Pensión'].includes(feeType) || (feeType === 'Pensión' && !/^\d{4}-\d{2}$/.test(billingPeriod)) || (feeType === 'Matrícula' && billingPeriod !== '')) return json(response, 400, { error: 'Revisa el concepto y el periodo del cobro.' })
+    if (!Number.isFinite(amount) || amount < 0 || amount > 1000000000 || !validDate(dueDate) || !['Pendiente', 'Pagado', 'Exonerado'].includes(status) || (paidAt && !validDate(paidAt)) || paymentReference.length > 120 || notes.length > 500) return json(response, 400, { error: 'Revisa el valor, las fechas, estado y referencia del pago.' })
+    const existing = await db.get('SELECT id FROM student_payment_records WHERE student_id = ? AND academic_year = ? AND fee_type = ? AND billing_period = ?', studentId, academicYear, feeType, billingPeriod)
+    if (existing) return json(response, 409, { error: 'Ya existe un cobro de ese concepto y periodo para el estudiante. Edita el registro existente.' })
+    const id = randomUUID()
+    await db.run(`INSERT INTO student_payment_records (id, school_id, student_id, academic_year, fee_type, billing_period, amount, due_date, status, paid_at, payment_reference, notes, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, user.school_id, studentId, academicYear, feeType, billingPeriod, amount, dueDate, status, status === 'Pagado' ? (paidAt || new Date().toISOString().slice(0, 10)) : null, paymentReference, notes, user.id, user.id)
+    await logAudit(user.school_id, user.id, 'student_payment_created')
+    return json(response, 201, { created: true, id })
+  }
+  const studentPaymentMatch = url.pathname.match(/^\/api\/student-payments\/([0-9a-f-]{36})$/i)
+  if (studentPaymentMatch && method === 'PATCH') {
+    if (!['admin', 'rectoria', 'tesoreria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para editar pagos.' })
+    const id = studentPaymentMatch[1]
+    const existing = await db.get('SELECT id FROM student_payment_records WHERE id = ? AND school_id = ?', id, user.school_id)
+    if (!existing) return json(response, 404, { error: 'No encontramos ese registro de pago.' })
+    const body = await readBody(request)
+    const status = String(body.status || ''), paidAt = String(body.paidAt || ''), reference = String(body.paymentReference || '').trim(), notes = String(body.notes || '').trim()
+    if (!['Pendiente', 'Pagado', 'Exonerado'].includes(status) || (paidAt && !validDate(paidAt)) || reference.length > 120 || notes.length > 500) return json(response, 400, { error: 'Revisa el estado, fecha, referencia y observación.' })
+    await db.run('UPDATE student_payment_records SET status = ?, paid_at = ?, payment_reference = ?, notes = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', status, status === 'Pagado' ? (paidAt || new Date().toISOString().slice(0, 10)) : null, reference, notes, user.id, id, user.school_id)
+    await logAudit(user.school_id, user.id, 'student_payment_updated')
+    return json(response, 200, { updated: true })
   }
   if (url.pathname.startsWith('/api/')) return json(response, 404, { error: 'Ruta no encontrada.' })
   return json(response, 404, { error: 'Recurso no encontrado.' })
