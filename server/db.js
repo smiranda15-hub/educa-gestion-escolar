@@ -120,6 +120,8 @@ export async function migrate() {
       school_id TEXT NOT NULL REFERENCES schools(id),
       full_name TEXT NOT NULL,
       document TEXT NOT NULL,
+      document_type TEXT NOT NULL DEFAULT '',
+      document_issued_place TEXT NOT NULL DEFAULT '',
       grade TEXT NOT NULL,
       guardian_name TEXT NOT NULL,
       guardian_phone TEXT NOT NULL DEFAULT '',
@@ -451,6 +453,11 @@ export async function migrate() {
       signature_snapshot TEXT NOT NULL DEFAULT '[]',
       certificate_type TEXT NOT NULL,
       student_name TEXT NOT NULL,
+      student_document_type TEXT NOT NULL DEFAULT '',
+      student_document_number TEXT NOT NULL DEFAULT '',
+      student_document_issued_place TEXT NOT NULL DEFAULT '',
+      requester_name TEXT NOT NULL DEFAULT '',
+      requester_role TEXT NOT NULL DEFAULT '',
       grade TEXT NOT NULL,
       academic_year TEXT NOT NULL,
       issued_by TEXT NOT NULL REFERENCES users(id),
@@ -472,6 +479,7 @@ export async function migrate() {
       certificate_type TEXT NOT NULL,
       academic_year TEXT NOT NULL,
       requested_by TEXT NOT NULL REFERENCES users(id),
+      requester_role TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'Pendiente',
       review_note TEXT NOT NULL DEFAULT '',
       reviewed_by TEXT REFERENCES users(id),
@@ -561,9 +569,16 @@ export async function migrate() {
     for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BYTEA']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
+    for (const [column, definition] of [['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"]]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
+    }
     for (const [column, definition] of [['verification_code', 'TEXT'], ['signature_snapshot', "TEXT NOT NULL DEFAULT '[]'"], ['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificates' AND column_name = ?", column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
     }
+    for (const [column, definition] of [['student_document_type', "TEXT NOT NULL DEFAULT ''"], ['student_document_number', "TEXT NOT NULL DEFAULT ''"], ['student_document_issued_place', "TEXT NOT NULL DEFAULT ''"], ['requester_name', "TEXT NOT NULL DEFAULT ''"], ['requester_role', "TEXT NOT NULL DEFAULT ''"]]) {
+      if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificates' AND column_name = ?", column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
+    }
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'school_certificate_requests' AND column_name = 'requester_role'")) await db.exec("ALTER TABLE school_certificate_requests ADD COLUMN requester_role TEXT NOT NULL DEFAULT ''")
     for (const [column, definition] of [['contact_phone', "TEXT NOT NULL DEFAULT ''"], ['profile_photo_content_type', 'TEXT'], ['profile_photo_file_name', 'TEXT'], ['profile_photo_data', 'BYTEA']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = ?", column)) await db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`)
     }
@@ -597,13 +612,18 @@ export async function migrate() {
       if (!studentAccessColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     const studentColumns = await db.all('PRAGMA table_info(students)')
-    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB']]) {
+    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB'], ['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"]]) {
       if (!studentColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     const certificateColumns = await db.all('PRAGMA table_info(school_certificates)')
     for (const [column, definition] of [['verification_code', 'TEXT'], ['signature_snapshot', "TEXT NOT NULL DEFAULT '[]'"], ['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id)'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
       if (!certificateColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
     }
+    for (const [column, definition] of [['student_document_type', "TEXT NOT NULL DEFAULT ''"], ['student_document_number', "TEXT NOT NULL DEFAULT ''"], ['student_document_issued_place', "TEXT NOT NULL DEFAULT ''"], ['requester_name', "TEXT NOT NULL DEFAULT ''"], ['requester_role', "TEXT NOT NULL DEFAULT ''"]]) {
+      if (!certificateColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE school_certificates ADD COLUMN ${column} ${definition}`)
+    }
+    const certificateRequestColumns = await db.all('PRAGMA table_info(school_certificate_requests)')
+    if (!certificateRequestColumns.some(item => item.name === 'requester_role')) await db.exec("ALTER TABLE school_certificate_requests ADD COLUMN requester_role TEXT NOT NULL DEFAULT ''")
     const eventColumns = await db.all('PRAGMA table_info(school_events)')
     if (!eventColumns.some(column => column.name === 'registration_capacity')) await db.exec('ALTER TABLE school_events ADD COLUMN registration_capacity INTEGER')
     if (!eventColumns.some(column => column.name === 'registration_deadline')) await db.exec('ALTER TABLE school_events ADD COLUMN registration_deadline TEXT')
