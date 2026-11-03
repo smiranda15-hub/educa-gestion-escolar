@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "3212519711",
+    "project_id": "educa-gestion-escolar",
+    "storage_bucket": "educa-gestion-escolar.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:3212519711:android:663ccf5e77fd2fd097e82a",
+        "android_client_info": {
+          "package_name": "com.educa.gestionescolar"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCYiQfLiV7ukR9IMfhj2pHeyPVNVw73IUM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

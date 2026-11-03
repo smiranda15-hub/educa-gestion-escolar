@@ -72,3 +72,15 @@ El proyecto incluye un contenedor Android con Capacitor. El APK carga la aplicac
 Para recompilar en Windows instala Node.js, JDK 21 y Android SDK Platform 36 con Build Tools 36.0.0. Configura `JAVA_HOME`, `ANDROID_HOME` y `ANDROID_SDK_ROOT`, acepta las licencias del SDK y ejecuta `npm install` seguido de `npm run android:apk`. El archivo de depuración se genera en `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 El APK de depuración se puede instalar directamente en un teléfono Android; Android puede pedir autorización para instalar aplicaciones desde el navegador o administrador de archivos. Este paquete no está firmado para publicarse en Google Play.
+
+### Avisos push para la APK Android
+
+EDUCA guarda las notificaciones en la bandeja de cada usuario y la APK registra el dispositivo tras iniciar sesión. Para que Android las muestre también cuando la aplicación está en segundo plano, configura Firebase Cloud Messaging:
+
+1. En Firebase crea/selecciona un proyecto y registra una aplicación Android con el identificador `com.educa.gestionescolar`.
+2. Descarga `google-services.json` y colócalo en `android/app/google-services.json`. No lo coloques en `src/` ni dentro del frontend.
+3. En Firebase habilita Firebase Cloud Messaging. Crea una clave JSON de cuenta de servicio para el backend.
+4. En Railway, agrega `FIREBASE_SERVICE_ACCOUNT_JSON` al servicio EDUCA y pega como valor el contenido JSON completo de la cuenta de servicio. Es una clave privada: no la subas a GitHub ni la incluyas en el APK.
+5. Despliega el backend y vuelve a generar e instalar el APK con `npm run android:apk`. Acepta el permiso de notificaciones en el teléfono.
+
+Los eventos del calendario y los comunicados envían avisos a las cuentas destinatarias del colegio o curso; también se notifican nuevas solicitudes de constancia y respuestas de justificaciones. Un evento futuro, por ejemplo «Entrega de boletines», avisa a sus destinatarios al publicarse. El envío push no altera la notificación guardada en la bandeja de EDUCA. Sin la configuración Firebase de los pasos anteriores, la bandeja interna sigue disponible, pero no se reciben avisos del sistema Android.

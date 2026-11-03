@@ -83,6 +83,46 @@ const defaultSignatureRules = {
   report_card: ['group_director', 'rector'], study_certificate: ['rector', 'academic_secretary'],
   academic_certificate: ['rector', 'academic_coordinator'], academic_report: ['group_director', 'academic_coordinator'], other: ['other', '']
 }
+let pushMessagingPromise
+async function getPushMessaging() {
+  const encodedCredentials = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  if (!encodedCredentials) return null
+  if (!pushMessagingPromise) pushMessagingPromise = (async () => {
+    const credentials = JSON.parse(encodedCredentials)
+    if (!credentials.project_id || !credentials.client_email || !credentials.private_key) throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON no contiene una cuenta de servicio válida.')
+    const { getApps, initializeApp, cert } = await import('firebase-admin/app')
+    const { getMessaging } = await import('firebase-admin/messaging')
+    const app = getApps().find(item => item.name === 'educa-push') || initializeApp({ credential: cert(credentials), projectId: credentials.project_id }, 'educa-push')
+    return getMessaging(app)
+  })()
+  return pushMessagingPromise
+}
+async function sendPushNotifications(schoolId, recipientIds, title, body, category = 'general', eventId = '') {
+  const uniqueRecipients = [...new Set(recipientIds.filter(Boolean))]
+  if (!uniqueRecipients.length || !process.env.FIREBASE_SERVICE_ACCOUNT_JSON) return { sent: 0, configured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) }
+  try {
+    const messaging = await getPushMessaging()
+    const tokens = await db.all(`SELECT d.token FROM device_push_tokens d JOIN users u ON u.id = d.user_id AND u.school_id = d.school_id
+      WHERE d.school_id = ? AND d.is_active = 1 AND u.is_active = 1 AND u.deleted_at IS NULL AND d.user_id IN (${uniqueRecipients.map(() => '?').join(',')})`, schoolId, ...uniqueRecipients)
+    let sent = 0
+    for (let offset = 0; offset < tokens.length; offset += 500) {
+      const batch = tokens.slice(offset, offset + 500)
+      const result = await messaging.sendEachForMulticast({
+        tokens: batch.map(item => item.token),
+        notification: { title: String(title).slice(0, 120), body: String(body).slice(0, 240) },
+        data: { category: String(category), eventId: String(eventId || ''), destination: 'notifications' },
+        android: { priority: 'high', notification: { channelId: 'educa_notifications', sound: 'default' } },
+      })
+      sent += result.successCount
+      const invalidTokens = result.responses.flatMap((entry, index) => entry.success ? [] : ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(entry.error?.code) ? [batch[index].token] : [])
+      if (invalidTokens.length) await db.run(`UPDATE device_push_tokens SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE token IN (${invalidTokens.map(() => '?').join(',')})`, ...invalidTokens)
+    }
+    return { sent, configured: true }
+  } catch (error) {
+    console.error('EDUCA push notification delivery failed:', error.code || 'delivery_error')
+    return { sent: 0, configured: true, failed: true }
+  }
+}
 async function resolveDocumentSigners(schoolId, documentType, courseId = null) {
   const defaults = defaultSignatureRules[documentType] || defaultSignatureRules.other
   const rule = await db.get('SELECT primary_position AS "primaryPosition", secondary_position AS "secondaryPosition", primary_staff_id AS "primaryStaffId", secondary_staff_id AS "secondaryStaffId" FROM document_signature_rules WHERE school_id = ? AND document_type = ?', schoolId, documentType)
@@ -580,6 +620,19 @@ async function route(request, response) {
       FROM user_notifications WHERE school_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50`, user.school_id, user.id)
     return json(response, 200, { notifications: rows, unread: rows.filter(row => !row.readAt).length })
   }
+  if (url.pathname === '/api/push/register' && method === 'POST') {
+    const body = await readBody(request), token = String(body.token || '').trim(), platform = String(body.platform || 'android')
+    if (token.length < 100 || token.length > 4096 || !['android', 'ios'].includes(platform)) return json(response, 400, { error: 'El token o la plataforma del dispositivo no son válidos.' })
+    await db.run(`INSERT INTO device_push_tokens (token, school_id, user_id, platform) VALUES (?, ?, ?, ?)
+      ON CONFLICT(token) DO UPDATE SET school_id = excluded.school_id, user_id = excluded.user_id, platform = excluded.platform, is_active = 1, updated_at = CURRENT_TIMESTAMP`, token, user.school_id, user.id, platform)
+    return json(response, 200, { registered: true })
+  }
+  if (url.pathname === '/api/push/unregister' && method === 'POST') {
+    const body = await readBody(request), token = String(body.token || '').trim()
+    if (token.length < 100 || token.length > 4096) return json(response, 400, { error: 'El token del dispositivo no es válido.' })
+    await db.run('UPDATE device_push_tokens SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE token = ? AND school_id = ? AND user_id = ?', token, user.school_id, user.id)
+    return json(response, 200, { unregistered: true })
+  }
   const notificationReadMatch = url.pathname.match(/^\/api\/notifications\/([0-9a-f-]{36})\/read$/i)
   if (notificationReadMatch && method === 'PATCH') {
     await db.run('UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ? AND user_id = ?', notificationReadMatch[1], user.school_id, user.id)
@@ -733,8 +786,10 @@ async function route(request, response) {
       await tx.run('INSERT INTO school_events (id, school_id, course_id, title, details, event_date, start_time, end_time, event_type, registration_capacity, registration_deadline, registration_open, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course?.id || null, title, details, eventDate, startTime, endTime, eventType, registrationCapacity, registrationDeadline, registrationOpen ? 1 : 0, user.id)
       for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, event_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient, id, `Nuevo evento: ${title}`, `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ''}`, 'calendar')
     })
+    const eventNoticeBody = `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ' · Todo el colegio'}`
+    const pushResult = await sendPushNotifications(user.school_id, recipients, `Nuevo evento: ${title}`, eventNoticeBody, 'calendar', id)
     await logAudit(user.school_id, user.id, 'calendar_event_created')
-    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length })
+    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent })
   }
   const calendarDeleteMatch = url.pathname.match(/^\/api\/calendar\/([0-9a-f-]{36})$/i)
   if (calendarDeleteMatch && method === 'DELETE') {
@@ -851,6 +906,7 @@ async function route(request, response) {
     catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya hay una justificación registrada para ese estudiante y fecha.' }); throw error }
     const reviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','coordinacion','secretaria')", user.school_id)
     for (const reviewer of reviewers) await db.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, reviewer.id, 'Nueva justificación de ausencia', `${linked.name} · ${date}`, 'attendance')
+    await sendPushNotifications(user.school_id, reviewers.map(item => item.id), 'Nueva justificación de ausencia', 'Hay una solicitud pendiente para revisar en EDUCA.', 'attendance')
     await logAudit(user.school_id, user.id, 'attendance_justification_created')
     return json(response, 201, { id })
   }
@@ -880,6 +936,7 @@ async function route(request, response) {
       if (status === 'Aprobada') await tx.run("UPDATE attendance_records SET status = 'Justificado', marked_by = ?, marked_at = CURRENT_TIMESTAMP WHERE school_id = ? AND student_id = ? AND attendance_date = ? AND status = 'Ausente'", user.id, user.school_id, item.studentId, item.date)
       await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, item.createdBy, `Justificación ${status.toLocaleLowerCase('es')}`, `${item.date}${note ? ` · ${note}` : ''}`, 'attendance')
     })
+    await sendPushNotifications(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar la respuesta.', 'attendance')
     await logAudit(user.school_id, user.id, 'attendance_justification_reviewed')
     return json(response, 200, { updated: true })
   }
@@ -1031,6 +1088,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, `Nuevo comunicado: ${title}`, content.slice(0, 220), 'communication')
       }
     })
+    await sendPushNotifications(user.school_id, recipientUsers.map(item => item.id), `Nuevo comunicado: ${title}`, 'Abre EDUCA para leer el mensaje.', 'communication', id)
     await logAudit(user.school_id, user.id, `communication_created:${audience}`)
     return json(response, 201, { created: true, id, recipientCount: recipientUsers.length })
   }
@@ -1337,6 +1395,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     await db.run(`INSERT INTO school_certificate_requests (id, school_id, student_id, certificate_type, academic_year, requested_by, requester_role, replaces_certificate_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, user.school_id, studentId, type, academicYear, user.id, user.role, replacesId || null)
     for (const rector of rectors) await db.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, rector.id, 'Solicitud de constancia pendiente', `${student.name} · ${type}`, 'certificate')
+    await sendPushNotifications(user.school_id, rectors.map(item => item.id), 'Solicitud de constancia pendiente', 'Hay un documento escolar pendiente para revisión en EDUCA.', 'certificate', id)
     await logAudit(user.school_id, user.id, 'certificate_request_created')
     return json(response, 201, { request: { id, studentId, certificateType: type, academicYear, status: 'Pendiente' } })
   }
@@ -1392,6 +1451,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           await tx.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, recipient.requested_by, `Solicitud ${decision.toLocaleLowerCase('es')}`, note || 'La constancia fue aprobada y quedó disponible.', 'certificate')
         })
       } catch (error) { if (error.status) return json(response, error.status, { error: error.message }); throw error }
+      await sendPushNotifications(user.school_id, [requestRow.requested_by], `Solicitud ${decision.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar el resultado.', 'certificate', issuedCertificate?.id || id)
       await logAudit(user.school_id, user.id, `certificate_request_${decision === 'Aprobada' ? 'approved' : 'rejected'}`)
       return json(response, 200, { status: decision, certificateId: issuedCertificate?.id })
     }
@@ -1983,6 +2043,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         WHERE a.school_id = ? AND c.school_id = ? AND c.academic_year = ? AND a.period = ?`, user.school_id, user.school_id, academicYear, period)).count)
       if (!grades) return json(response, 409, { error: 'No hay notas registradas para publicar en este año y periodo.' })
     }
+    const previousPublication = await db.get('SELECT is_published AS "isPublished" FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND period = ?', user.school_id, academicYear, period)
     const publishedAt = body.published ? new Date().toISOString() : null
     const publicationId = randomUUID()
     await db.run(`INSERT INTO grade_period_publications (id, school_id, academic_year, period, is_published, published_by, published_at)
@@ -1990,8 +2051,26 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       ON CONFLICT(school_id, academic_year, period) DO UPDATE SET is_published = excluded.is_published,
         published_by = excluded.published_by, published_at = excluded.published_at`,
       publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
+    let notified = 0
+    if (body.published && !previousPublication?.isPublished) {
+      const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
+        JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
+        JOIN student_grades sg ON sg.student_id = st.id
+        JOIN grade_assessments a ON a.id = sg.assessment_id AND a.school_id = st.school_id AND a.period = ?
+        JOIN courses c ON c.id = a.course_id AND c.school_id = st.school_id AND c.academic_year = ?
+        JOIN users u ON u.id = us.user_id AND u.school_id = st.school_id AND u.is_active = 1 AND u.deleted_at IS NULL
+        WHERE us.school_id = ?`, user.school_id, period, academicYear, user.school_id)
+      const notificationTitle = 'Boletines disponibles'
+      const notificationBody = `${period} · Año lectivo ${academicYear}. Ya puedes consultar el boletín en EDUCA.`
+      await db.transaction(async tx => {
+        for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card')
+      })
+      const pushResult = await sendPushNotifications(user.school_id, recipients.map(item => item.id), notificationTitle, notificationBody, 'report_card')
+      notified = recipients.length
+      await logAudit(user.school_id, user.id, `grade_period_families_notified:${pushResult.sent}`)
+    }
     await logAudit(user.school_id, user.id, body.published ? 'grade_period_published' : 'grade_period_unpublished')
-    return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt })
+    return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt, notified })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })

@@ -500,6 +500,16 @@ export async function migrate() {
       read_at TEXT
     );
     CREATE INDEX IF NOT EXISTS user_notifications_unread_idx ON user_notifications(school_id, user_id, read_at, created_at);
+    CREATE TABLE IF NOT EXISTS device_push_tokens (
+      token TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      platform TEXT NOT NULL DEFAULT 'android',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS device_push_tokens_user_idx ON device_push_tokens(school_id, user_id, is_active);
     CREATE TABLE IF NOT EXISTS attendance_justifications (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,

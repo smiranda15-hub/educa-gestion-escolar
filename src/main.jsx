@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Capacitor } from '@capacitor/core'
+import { PushNotifications } from '@capacitor/push-notifications'
 import 'bootstrap/dist/css/bootstrap.min.css'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -160,7 +162,13 @@ function CalendarModule({ user, notify }) {
 function NotificationsModule({ notify }) {
   const [items, setItems] = useState([]), [loading, setLoading] = useState(true), [error, setError] = useState('')
   const load = async () => { try { const response = await fetch('/api/notifications', { credentials: 'same-origin' }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'No se pudieron cargar las notificaciones.'); setItems(result.notifications || []) } catch (err) { setError(err.message || 'No se pudo conectar con el servidor.') } finally { setLoading(false) } }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const onNotificationUpdate = () => load()
+    window.addEventListener('educa:notifications-updated', onNotificationUpdate)
+    const timer = window.setInterval(load, 30000)
+    return () => { window.removeEventListener('educa:notifications-updated', onNotificationUpdate); window.clearInterval(timer) }
+  }, [])
   const markRead = async item => { const response = await fetch(`/api/notifications/${item.id}/read`, { method: 'PATCH', credentials: 'same-origin' }); if (response.ok) setItems(rows => rows.map(row => row.id === item.id ? { ...row, readAt: new Date().toISOString() } : row)) }
   const markAll = async () => { const response = await fetch('/api/notifications/read-all', { method: 'POST', credentials: 'same-origin' }); if (response.ok) { setItems(rows => rows.map(row => ({ ...row, readAt: row.readAt || new Date().toISOString() }))); notify('Notificaciones marcadas como leídas.') } }
   return <section className="students-page notifications-page"><div className="students-title"><div><div className="eyebrow"><span className="live-dot"/> CENTRO DE AVISOS</div><h1>Notificaciones</h1><p className="welcome-sub">Avisos internos de eventos escolares y solicitudes.</p></div><button className="button button-soft" disabled={!items.some(item => !item.readAt)} onClick={markAll}>Marcar todas como leídas</button></div>{error && <div className="login-message login-error" role="alert">{error}</div>}{loading ? <div className="students-empty">Cargando notificaciones…</div> : items.length ? <div className="notification-list">{items.map(item => <article className={`notification-card ${item.readAt ? 'notification-card-read' : ''}`} key={item.id}><span className="notification-icon"><Bell size={17}/></span><div><strong>{item.title}</strong><p>{item.body}</p><small>{new Date(item.createdAt).toLocaleString('es-CO')}</small></div>{!item.readAt && <button className="button button-soft" onClick={() => markRead(item)}>Marcar leída</button>}</article>)}</div> : <div className="students-empty"><Bell size={22}/><strong>No tienes notificaciones</strong><p>Los avisos internos del colegio aparecerán aquí.</p></div>}</section>
@@ -620,6 +628,7 @@ function InstitutionManagerModule({ user, notify, onCreated, onUpdated }) {
 function App() {
   const [authenticated, setAuthenticated] = useState(false)
   const [user, setUser] = useState(null)
+  const pushTokenRef = useRef('')
   const [profileRevision, setProfileRevision] = useState(0)
   const [schools, setSchools] = useState([])
   const [brandSettings, setBrandSettings] = useState(null)
@@ -669,6 +678,39 @@ function App() {
     const timer = window.setInterval(refresh, 30000)
     return () => { alive = false; window.clearInterval(timer) }
   }, [authenticated])
+  useEffect(() => {
+    if (!authenticated || !user?.id || !Capacitor.isNativePlatform()) return
+    let disposed = false
+    const handles = []
+    const attachPush = async () => {
+      try {
+        if (Capacitor.getPlatform() === 'android') await PushNotifications.createChannel({ id: 'educa_notifications', name: 'Avisos de EDUCA', description: 'Eventos, comunicados y novedades del colegio', importance: 5, sound: 'default', vibration: true })
+        const registration = await PushNotifications.addListener('registration', async token => {
+          if (disposed) return
+          pushTokenRef.current = token.value
+          try { await fetch('/api/push/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ token: token.value, platform: Capacitor.getPlatform() }) }) } catch { /* Los avisos internos siguen disponibles sin conexión. */ }
+        })
+        handles.push(registration)
+        const receive = await PushNotifications.addListener('pushNotificationReceived', notification => {
+          if (disposed) return
+          window.dispatchEvent(new Event('educa:notifications-updated'))
+          fetch('/api/notifications', { credentials: 'same-origin' }).then(response => response.ok ? response.json() : null).then(result => { if (!disposed && result) setUnreadNotifications(result.unread || 0) }).catch(() => {})
+          setNotice(notification.title ? `Nuevo aviso: ${notification.title}` : 'Tienes una notificación nueva.')
+          window.setTimeout(() => setNotice(current => current.startsWith('Nuevo aviso:') || current === 'Tienes una notificación nueva.' ? '' : current), 5000)
+        })
+        handles.push(receive)
+        const action = await PushNotifications.addListener('pushNotificationActionPerformed', () => {
+          if (!disposed) { setActive('Notificaciones'); setMenuOpen(false) }
+        })
+        handles.push(action)
+        const permission = await PushNotifications.checkPermissions()
+        const receivePermission = permission.receive === 'prompt' ? (await PushNotifications.requestPermissions()).receive : permission.receive
+        if (receivePermission === 'granted') await PushNotifications.register()
+      } catch (error) { console.warn('No se pudo activar el registro de notificaciones en este dispositivo.', error) }
+    }
+    attachPush()
+    return () => { disposed = true; handles.forEach(handle => handle.remove()) }
+  }, [authenticated, user?.id])
   const [students, setStudents] = useState([])
   const [studentsError, setStudentsError] = useState('')
   const [studentDialog, setStudentDialog] = useState(false)
@@ -863,9 +905,11 @@ function App() {
   const logout = async () => {
     let confirmed = false
     try {
+      if (pushTokenRef.current) await fetch('/api/push/unregister', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ token: pushTokenRef.current }) })
       const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
       confirmed = response.ok
     } catch { /* Se cierra la vista local aunque el servidor no responda. */ }
+    pushTokenRef.current = ''
     setAuthenticated(false); setUser(null); setStudents([]); setDashboardData(null)
     setSchoolUsers([]); setPortalStudents([]); setPortalAssignments([]); setReportCardData(null)
     setAttendanceRows([]); setGradeRows([]); setAssessmentSubmissions([]); setUnreadNotifications(0); setQuery(''); setMenuOpen(false); setActive('Resumen')
