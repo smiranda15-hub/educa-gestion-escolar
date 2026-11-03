@@ -64,3 +64,11 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 ## Construcción
 
 Ejecuta `npm run build` para generar el frontend en `dist/`. `npm start` inicia la API y sirve el frontend compilado desde el mismo proceso.
+
+## Aplicación Android
+
+El proyecto incluye un contenedor Android con Capacitor. El APK carga la aplicación publicada en Railway, así que requiere conexión a Internet y muestra la versión que esté desplegada en ese dominio.
+
+Para recompilar en Windows instala Node.js, JDK 21 y Android SDK Platform 36 con Build Tools 36.0.0. Configura `JAVA_HOME`, `ANDROID_HOME` y `ANDROID_SDK_ROOT`, acepta las licencias del SDK y ejecuta `npm install` seguido de `npm run android:apk`. El archivo de depuración se genera en `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+El APK de depuración se puede instalar directamente en un teléfono Android; Android puede pedir autorización para instalar aplicaciones desde el navegador o administrador de archivos. Este paquete no está firmado para publicarse en Google Play.

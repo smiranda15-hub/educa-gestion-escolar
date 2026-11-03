@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EDUCA Gestión Escolar</string>
+    <string name="title_activity_main">EDUCA Gestión Escolar</string>
+    <string name="package_name">com.educa.gestionescolar</string>
+    <string name="custom_url_scheme">com.educa.gestionescolar</string>
+</resources>

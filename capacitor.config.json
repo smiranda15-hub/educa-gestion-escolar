@@ -1,0 +1,14 @@
+{
+  "appId": "com.educa.gestionescolar",
+  "appName": "EDUCA Gestión Escolar",
+  "webDir": "dist",
+  "backgroundColor": "#f7f8fc",
+  "server": {
+    "url": "https://educa-gestion-escolar-production.up.railway.app",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  }
+}

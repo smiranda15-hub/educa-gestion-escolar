@@ -278,6 +278,8 @@ export async function migrate() {
       instructions TEXT NOT NULL DEFAULT '',
       due_at TEXT,
       delivery_mode TEXT NOT NULL DEFAULT 'file' CHECK (delivery_mode IN ('file','online')),
+      activity_type TEXT NOT NULL DEFAULT 'assignment',
+      integrity_monitoring INTEGER NOT NULL DEFAULT 0,
       is_published INTEGER NOT NULL DEFAULT 1,
       external_form_url TEXT,
       weight_percent REAL NOT NULL DEFAULT 100 CHECK (weight_percent > 0 AND weight_percent <= 100),
@@ -384,6 +386,16 @@ export async function migrate() {
       UNIQUE (assessment_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS online_assessment_attempts_school_idx ON online_assessment_attempts(school_id, assessment_id, student_id);
+    CREATE TABLE IF NOT EXISTS online_assessment_events (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+      attempt_id TEXT NOT NULL REFERENCES online_assessment_attempts(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL CHECK (event_type IN ('tab_hidden','window_blur','fullscreen_exit','page_exit')),
+      occurred_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS online_assessment_events_scope_idx ON online_assessment_events(school_id, assessment_id, student_id, occurred_at);
     CREATE TABLE IF NOT EXISTS communications (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
@@ -573,6 +585,8 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'delivery_mode'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'activity_type'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN activity_type TEXT NOT NULL DEFAULT 'assignment'")
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'integrity_monitoring'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN integrity_monitoring INTEGER NOT NULL DEFAULT 0')
   } else {
     const schoolLifecycleColumns = await db.all('PRAGMA table_info(schools)')
     for (const [column, definition] of [['is_active', 'INTEGER NOT NULL DEFAULT 1'], ['suspension_reason', "TEXT NOT NULL DEFAULT ''"], ['suspended_at', 'TEXT'], ['archived_at', 'TEXT']]) {
@@ -616,6 +630,8 @@ export async function migrate() {
     if (!assessmentColumns.some(column => column.name === 'delivery_mode')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!assessmentColumns.some(column => column.name === 'is_published')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!assessmentColumns.some(column => column.name === 'external_form_url')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
+    if (!assessmentColumns.some(column => column.name === 'activity_type')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN activity_type TEXT NOT NULL DEFAULT 'assignment'")
+    if (!assessmentColumns.some(column => column.name === 'integrity_monitoring')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN integrity_monitoring INTEGER NOT NULL DEFAULT 0')
   }
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS students_card_code_idx ON students(card_code)')
   if (!await db.get("SELECT version FROM schema_migrations WHERE version = ?", 21)) {

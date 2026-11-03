@@ -1737,7 +1737,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", is_published AS "isPublished", external_form_url AS "externalFormUrl", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
+    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", activity_type AS "activityType", integrity_monitoring AS "integrityMonitoring", is_published AS "isPublished", external_form_url AS "externalFormUrl", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
       FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
       ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
     return json(response, 200, { assessments })
@@ -1752,6 +1752,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const instructions = String(body.instructions || '').trim()
     const dueAt = String(body.dueAt || '').trim()
     const deliveryMode = String(body.deliveryMode || 'file')
+    const activityType = String(body.activityType || 'assignment')
+    const integrityMonitoring = body.integrityMonitoring === true && deliveryMode === 'online' ? 1 : 0
     const isPublished = body.isPublished === true ? 1 : 0
     const externalFormUrl = String(body.externalFormUrl || '').trim()
     const questions = Array.isArray(body.questions) ? body.questions : []
@@ -1763,7 +1765,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    if (!['file', 'online'].includes(deliveryMode) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el periodo, el nombre, las instrucciones, el enlace de Google Forms, la fecha límite, la ponderación y el puntaje máximo.' })
+    if (!['file', 'online'].includes(deliveryMode) || !['assignment', 'class_activity'].includes(activityType) || (activityType === 'class_activity' && (deliveryMode !== 'file' || externalFormUrl || questions.length || images.length)) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el tipo de registro, periodo, nombre, instrucciones, enlace, fecha, ponderación y puntaje máximo.' })
     if (images.length > 5) return json(response, 400, { error: 'Puedes adjuntar hasta 5 imágenes por actividad.' })
     const imageRecords = []
     let imageTotalBytes = 0
@@ -1789,7 +1791,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (deliveryMode === 'file' && questions.length) return json(response, 400, { error: 'Los trabajos con archivo no deben incluir preguntas en línea.' })
     const id = randomUUID()
     await db.transaction(async tx => {
-      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, is_published, external_form_url, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, isPublished, externalFormUrl || null, weightPercent, maxScore, user.id)
+      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, activity_type, integrity_monitoring, is_published, external_form_url, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, activityType, integrityMonitoring, isPublished, externalFormUrl || null, weightPercent, maxScore, user.id)
       for (let index = 0; index < questions.length; index++) {
         const question = questions[index]
         await tx.run('INSERT INTO online_assessment_questions (id, assessment_id, question_no, prompt, options_json, correct_option, points) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), id, index + 1, String(question.prompt).trim(), JSON.stringify(question.options.map(option => String(option).trim())), Number(question.correctOption), Number(question.points))
@@ -1797,13 +1799,13 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       for (const image of imageRecords) await tx.run('INSERT INTO assessment_images (id, school_id, assessment_id, file_name, content_type, file_size, file_data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', image.id, user.school_id, id, image.fileName, image.contentType, image.fileSize, image.fileData, user.id)
     })
     await logAudit(user.school_id, user.id, 'grade_assessment_created')
-    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, isPublished: Boolean(isPublished), externalFormUrl: externalFormUrl || null, images: imageRecords.map(({ id, fileName, contentType }) => ({ id, fileName, contentType })), weightPercent, maxScore } })
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, activityType, integrityMonitoring: Boolean(integrityMonitoring), isPublished: Boolean(isPublished), externalFormUrl: externalFormUrl || null, images: imageRecords.map(({ id, fileName, contentType }) => ({ id, fileName, contentType })), weightPercent, maxScore } })
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
-      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.activity_type AS "activityType", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
@@ -2054,7 +2056,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
     if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const assignments = await db.all(`SELECT a.id, a.title, a.instructions, a.due_at AS "dueAt", a.subject, a.period,
-        a.delivery_mode AS "deliveryMode", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl",
+        a.delivery_mode AS "deliveryMode", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl",
         a.max_score AS "maxScore", c.name AS "courseName", c.academic_year AS "academicYear",
         sg.score, sg.comment, latest.id AS "submissionId", latest.original_file_name AS "fileName",
         latest.uploaded_at AS "uploadedAt", latest.submission_no AS "submissionNo",
@@ -2065,7 +2067,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         WHERE ws.assessment_id = a.id AND ws.student_id = ? ORDER BY ws.submission_no DESC LIMIT 1)
       LEFT JOIN online_assessment_attempts online_attempt ON online_attempt.assessment_id = a.id AND online_attempt.student_id = ?
       WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
-        AND (a.delivery_mode <> 'online' OR a.is_published = 1)
+        AND a.activity_type <> 'class_activity' AND (a.delivery_mode <> 'online' OR a.is_published = 1)
         AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
           AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
           OR (NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.status = 'Activa')
@@ -2101,14 +2103,26 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     response.end(image.fileData)
     return
   }
-  const onlineAssessmentAction = url.pathname.match(/^\/api\/portal\/online-assessments\/([0-9a-f-]{36})\/(start|draft|submit)$/i)
+  const integrityEventsMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})\/integrity-events$/i)
+  if (integrityEventsMatch && method === 'GET') {
+    if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar estas incidencias.' })
+    const assessment = await db.get('SELECT id, course_id AS "courseId", subject, integrity_monitoring AS "integrityMonitoring" FROM grade_assessments WHERE id = ? AND school_id = ?', integrityEventsMatch[1], user.school_id)
+    if (!assessment) return json(response, 404, { error: 'No encontramos la evaluación.' })
+    const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ? AND (? <> 'docente' OR user_id = ?)`, assessment.courseId, assessment.subject, user.role, user.id)
+    if (!assignment) return json(response, 403, { error: 'No tienes asignada esta evaluación.' })
+    const events = await db.all(`SELECT e.student_id AS "studentId", st.full_name AS "studentName", e.event_type AS "eventType", COUNT(*) AS count, MIN(e.occurred_at) AS "firstAt", MAX(e.occurred_at) AS "lastAt"
+      FROM online_assessment_events e JOIN students st ON st.id = e.student_id
+      WHERE e.school_id = ? AND e.assessment_id = ? GROUP BY e.student_id, st.full_name, e.event_type ORDER BY st.full_name, e.event_type`, user.school_id, assessment.id)
+    return json(response, 200, { monitoringEnabled: Boolean(assessment.integrityMonitoring), events })
+  }
+  const onlineAssessmentAction = url.pathname.match(/^\/api\/portal\/online-assessments\/([0-9a-f-]{36})\/(start|draft|submit|events)$/i)
   if (onlineAssessmentAction && ((onlineAssessmentAction[2] === 'draft' && method === 'PATCH') || (onlineAssessmentAction[2] !== 'draft' && method === 'POST'))) {
     if (user.role !== 'estudiante') return json(response, 403, { error: 'Solo la cuenta del estudiante puede realizar una evaluación en línea.' })
     const body = await readBody(request)
     const studentId = String(body.studentId || '')
     const student = await db.get("SELECT id, grade FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)
     if (!student || !await db.get("SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ? AND relationship = 'estudiante'", user.id, studentId)) return json(response, 403, { error: 'La evaluación solo está disponible para el estudiante vinculado a esta cuenta.' })
-    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.title, a.due_at AS "dueAt", a.max_score AS "maxScore", c.grade
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.title, a.due_at AS "dueAt", a.max_score AS "maxScore", a.integrity_monitoring AS "integrityMonitoring", c.grade
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.is_active = 1 AND a.delivery_mode = 'online' AND a.is_published = 1
         AND ((EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
@@ -2117,6 +2131,17 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
             AND c.grade = ? AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
               WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)))`, onlineAssessmentAction[1], user.school_id, user.school_id, student.id, student.id, student.grade)
     if (!assessment) return json(response, 404, { error: 'No encontramos una evaluación publicada para el curso de este estudiante.' })
+    if (onlineAssessmentAction[2] === 'events') {
+      const eventType = String(body.eventType || '')
+      const attemptId = String(body.attemptId || '')
+      if (!assessment.integrityMonitoring) return json(response, 409, { error: 'El registro de incidencias no está habilitado para esta evaluación.' })
+      if (!['tab_hidden', 'window_blur', 'fullscreen_exit', 'page_exit'].includes(eventType)) return json(response, 400, { error: 'El tipo de incidencia no es válido.' })
+      const attempt = await db.get('SELECT id FROM online_assessment_attempts WHERE id = ? AND assessment_id = ? AND student_id = ? AND submitted_at IS NULL', attemptId, assessment.id, student.id)
+      if (!attempt) return json(response, 409, { error: 'No hay un intento abierto para registrar la incidencia.' })
+      const recent = await db.get(`SELECT id FROM online_assessment_events WHERE attempt_id = ? AND event_type = ? AND occurred_at >= ?`, attempt.id, eventType, new Date(Date.now() - 1500).toISOString())
+      if (!recent) await db.run('INSERT INTO online_assessment_events (id, school_id, assessment_id, attempt_id, student_id, event_type, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, assessment.id, attempt.id, student.id, eventType, new Date().toISOString())
+      return json(response, 200, { recorded: true })
+    }
     const questions = await db.all('SELECT id, question_no AS "questionNo", prompt, options_json AS "optionsJson", correct_option AS "correctOption", points FROM online_assessment_questions WHERE assessment_id = ? ORDER BY question_no', assessment.id)
     if (!questions.length) return json(response, 409, { error: 'La evaluación todavía no tiene preguntas disponibles.' })
     let attempt = await db.get('SELECT id, submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
@@ -2133,7 +2158,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         }
       }
       if (attempt.submittedAt) return json(response, 200, { status: 'submitted', score: Number(attempt.score), maxScore: Number(assessment.maxScore) })
-      return json(response, 200, { status: 'started', attemptId: attempt.id, title: assessment.title, subject: assessment.subject,
+      return json(response, 200, { status: 'started', attemptId: attempt.id, title: assessment.title, subject: assessment.subject, monitoringEnabled: Boolean(assessment.integrityMonitoring),
         answers: JSON.parse(attempt.answersJson || '{}'),
         maxScore: Number(assessment.maxScore), questions: questions.map(question => ({ id: question.id, questionNo: question.questionNo,
           prompt: question.prompt, options: JSON.parse(question.optionsJson), points: Number(question.points) })) })
@@ -2181,7 +2206,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
     if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const assessment = await db.get(`SELECT a.id, c.grade FROM grade_assessments a JOIN courses c ON c.id = a.course_id
-      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1
+      WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.is_active = 1 AND a.activity_type <> 'class_activity'
         AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
           AND se.course_id = c.id AND se.academic_year = c.academic_year AND se.status = 'Activa')
           OR (NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.status = 'Activa')
