@@ -1430,7 +1430,10 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const directors = await db.all('SELECT course_id AS "courseId", staff_id AS "staffId" FROM course_group_directors WHERE school_id = ?', user.school_id)
     const rules = await db.all(`SELECT document_type AS "documentType", primary_position AS "primaryPosition", secondary_position AS "secondaryPosition", primary_staff_id AS "primaryStaffId", secondary_staff_id AS "secondaryStaffId"
       FROM document_signature_rules WHERE school_id = ? ORDER BY document_type`, user.school_id)
-    return json(response, 200, { staff: staff.map(item => ({ ...item, isActive: Boolean(item.isActive), hasSignature: Boolean(item.hasSignature) })), courses: courses.map(item => ({ ...item, isActive: Boolean(item.isActive) })), directors, rules })
+    const accounts = await db.all(`SELECT id, full_name AS "fullName", email, role, contact_phone AS phone FROM users
+      WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria','docente','orientacion','tesoreria')
+        AND is_active = 1 AND deleted_at IS NULL ORDER BY full_name`, user.school_id)
+    return json(response, 200, { staff: staff.map(item => ({ ...item, isActive: Boolean(item.isActive), hasSignature: Boolean(item.hasSignature) })), courses: courses.map(item => ({ ...item, isActive: Boolean(item.isActive) })), directors, rules, accounts })
   }
   const institutionalStaffMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})$/i)
   if ((url.pathname === '/api/institutional-staff' && method === 'POST') || (institutionalStaffMatch && method === 'PUT')) {
@@ -1442,10 +1445,15 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const signature = body.removeSignature ? null : parseInstitutionalSignature(body.signature)
     if (fullName.length < 3 || fullName.length > 120 || nationalId.length < 4 || !signerPositions.has(positionKey) || positionTitle.length < 2 || email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(response, 400, { error: 'Revisa nombre, identificación, cargo y correo del funcionario.' })
     if (body.signature && !body.removeSignature && !signature) return json(response, 400, { error: 'La firma debe ser un archivo PNG válido de hasta 512 KB.' })
-    if (userId && !await db.get('SELECT id FROM users WHERE id = ? AND school_id = ? AND deleted_at IS NULL', userId, user.school_id)) return json(response, 400, { error: 'La cuenta vinculada debe pertenecer a esta institución.' })
-    if (courseIds.length && Number((await db.get(`SELECT COUNT(*) AS count FROM courses WHERE school_id = ? AND id IN (${courseIds.map(() => '?').join(',')})`, user.school_id, ...courseIds)).count) !== courseIds.length) return json(response, 400, { error: 'Uno o más cursos no pertenecen a esta institución.' })
     const current = method === 'PUT' ? await db.get('SELECT id FROM institutional_staff WHERE id = ? AND school_id = ?', institutionalStaffMatch[1], user.school_id) : null
     if (method === 'PUT' && !current) return json(response, 404, { error: 'No encontramos ese funcionario en esta institución.' })
+    if (userId) {
+      const linkedAccount = await db.get("SELECT id FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','coordinacion','secretaria','docente','orientacion','tesoreria')", userId, user.school_id)
+      if (!linkedAccount) return json(response, 400, { error: 'Selecciona una cuenta activa del personal de esta institución.' })
+      const duplicateLink = await db.get('SELECT id FROM institutional_staff WHERE school_id = ? AND user_id = ? AND id <> ?', user.school_id, userId, current?.id || '')
+      if (duplicateLink) return json(response, 409, { error: 'Esa cuenta ya está vinculada a otro perfil institucional.' })
+    }
+    if (courseIds.length && Number((await db.get(`SELECT COUNT(*) AS count FROM courses WHERE school_id = ? AND id IN (${courseIds.map(() => '?').join(',')})`, user.school_id, ...courseIds)).count) !== courseIds.length) return json(response, 400, { error: 'Uno o más cursos no pertenecen a esta institución.' })
     const id = current?.id || randomUUID()
     const signatureFields = signature ? [signature.contentType, signature.fileName, signature.data] : null
     try {
