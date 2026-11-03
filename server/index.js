@@ -1263,7 +1263,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (['acudiente', 'estudiante'].includes(user.role) && !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const enrollment = await db.get(`SELECT academic_year AS "academicYear" FROM student_enrollments WHERE school_id = ? AND student_id = ? AND status = 'Activa' ORDER BY start_date DESC LIMIT 1`, user.school_id, studentId)
     const academicYear = academicYearInput || enrollment?.academicYear || `${new Date().getFullYear()}`
-    if (type === 'Constancia de matrícula' && !await db.get("SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'", user.school_id, studentId, academicYear)) return json(response, 409, { error: 'No hay una matrícula activa para ese año lectivo.' })
+    // In EDUCA, an active student record means the student is enrolled. Do not
+    // require a separate student_enrollments row to request an enrollment certificate.
     if (replacesId) {
       const original = await db.get("SELECT id, student_id AS \"studentId\", status FROM school_certificates WHERE id = ? AND school_id = ?", replacesId, user.school_id)
       if (!original || original.status !== 'Emitida' || original.studentId !== studentId) return json(response, 409, { error: 'Solo puedes solicitar corrección de una constancia vigente de este estudiante.' })
@@ -1307,7 +1308,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           if (decision === 'Aprobada') {
             const student = await tx.get("SELECT id, full_name AS name, grade FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", current.student_id, user.school_id)
             if (!student) throw Object.assign(new Error('El estudiante ya no está activo; no se puede emitir el documento.'), { status: 409 })
-            if (current.certificate_type === 'Constancia de matrícula' && !await tx.get("SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'", user.school_id, current.student_id, current.academic_year)) throw Object.assign(new Error('No hay matrícula activa para ese año lectivo.'), { status: 409 })
+            // An active student is considered enrolled by the institution even
+            // when no separate student_enrollments row exists for that year.
             const prior = current.replaces_certificate_id ? await tx.get("SELECT id FROM school_certificates WHERE id = ? AND school_id = ? AND status = 'Emitida'", current.replaces_certificate_id, user.school_id) : null
             if (current.replaces_certificate_id && !prior) throw Object.assign(new Error('La constancia que se quería corregir ya no está vigente.'), { status: 409 })
             const issuedAt = new Date().toISOString(), certificateNumber = `EDU-${issuedAt.slice(0, 4)}-${randomUUID().slice(0, 8).toUpperCase()}`
