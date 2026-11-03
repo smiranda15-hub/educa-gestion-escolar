@@ -532,3 +532,33 @@ html, body, #root { min-height: 100dvh; }
   .nav-section { margin-bottom: 9px; }
   .sidebar-note { margin-top: 8px; padding-block: 9px; }
 }
+
+.institutional-portal-card { display: grid; gap: 16px; margin-top: 22px; padding: 20px; border: 1px solid #dce6ef; border-radius: 16px; background: #fff; box-shadow: var(--shadow-card); }
+.institutional-portal-heading { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.institutional-portal-logo { display: grid; flex: 0 0 50px; width: 50px; height: 50px; place-items: center; overflow: hidden; border: 1px solid #e0e9ef; border-radius: 14px; background: #f1f7f8; color: #286b83; }
+.institutional-portal-logo img { width: 100%; height: 100%; object-fit: contain; }
+.institutional-portal-heading .eyebrow { color: #418d8d; font-size: 9px; }
+.institutional-portal-heading h2 { margin: 4px 0 2px; color: #17324f; font: 700 17px Manrope,sans-serif; }
+.institutional-portal-heading p { margin: 0; color: #74869a; font-size: 11px; }
+.institutional-portal-details { display: flex; flex-wrap: wrap; gap: 9px; }
+.institutional-portal-details > div, .institutional-portal-details > a { display: grid; flex: 1 1 155px; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid #e8edf2; border-radius: 10px; background: #fbfcfd; text-decoration: none; }
+.institutional-portal-details small { color: #8492a3; font-size: 9px; }
+.institutional-portal-details strong { overflow-wrap: anywhere; color: #344e65; font-size: 11px; font-weight: 600; }
+.institutional-gallery-placeholder { position: relative; display: grid; grid-template-columns: 72px minmax(0,1fr) auto; align-items: center; gap: 14px; overflow: hidden; padding: 14px; border: 1px solid #dcebed; border-radius: 13px; background: linear-gradient(110deg,#eff8f6 0%,#f4f7fc 60%,#f3f1ff 100%); }
+.institutional-gallery-art { position: relative; display: grid; width: 68px; height: 62px; place-items: center; overflow: hidden; border: 1px solid #d8e9e8; border-radius: 11px; background: #fff9; color: #438f91; }
+.institutional-gallery-art span { position: absolute; width: 29px; height: 42px; border: 1px solid #bedbd7; border-radius: 5px; background: #eaf5f2; transform: rotate(-14deg) translate(-10px,5px); }
+.institutional-gallery-art span:nth-child(2) { background: #eeeefe; transform: rotate(12deg) translate(12px,-6px); }
+.institutional-gallery-art span:nth-child(3) { width: 18px; height: 18px; border-radius: 50%; background: #e9f3ca; transform: translate(13px,-15px); }
+.institutional-gallery-art svg { position: relative; z-index: 1; }
+.institutional-gallery-placeholder > div:nth-child(2) { display: grid; gap: 4px; min-width: 0; }
+.institutional-gallery-label { display: flex; align-items: center; gap: 5px; color: #458a89; font-size: 8px; font-weight: 700; letter-spacing: .09em; }
+.institutional-gallery-placeholder strong { color: #304c63; font-size: 12px; }
+.institutional-gallery-placeholder p { margin: 0; color: #77899b; font-size: 10px; line-height: 1.5; }
+.institutional-gallery-placeholder .button { min-height: 36px; white-space: nowrap; }
+.role-home { max-width: 860px; }
+@media (max-width: 680px) {
+  .institutional-portal-card { gap: 12px; margin-top: 17px; padding: 15px; }
+  .institutional-gallery-placeholder { grid-template-columns: 54px minmax(0,1fr); gap: 10px; padding: 12px; }
+  .institutional-gallery-art { width: 52px; height: 54px; }
+  .institutional-gallery-placeholder .button { grid-column: 1/-1; justify-content: center; }
+}
