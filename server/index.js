@@ -93,6 +93,7 @@ const defaultSignatureRules = {
 }
 let pushMessagingPromise
 let emailTransportPromise
+const isEmailConfigured = () => Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM) || Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
 function getEmailTransport() {
   const host = String(process.env.SMTP_HOST || '').trim()
   const user = String(process.env.SMTP_USER || '').trim()
@@ -108,7 +109,41 @@ function getEmailTransport() {
 const escapeEmailHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
 async function sendEmail({ to, bcc, subject, text }) {
   const recipients = [...new Set([...(Array.isArray(to) ? to : [to]), ...(Array.isArray(bcc) ? bcc : [bcc])].filter(Boolean).map(value => String(value).trim()).filter(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) ]
-  if (!recipients.length) return { sent: 0, configured: Boolean(getEmailTransport()) }
+  if (!recipients.length) return { sent: 0, configured: isEmailConfigured() }
+  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim()
+  const resendFrom = String(process.env.RESEND_FROM || '').trim()
+  if (resendApiKey && resendFrom) {
+    let sent = 0
+    try {
+      for (let offset = 0; offset < recipients.length; offset += 40) {
+        const batch = recipients.slice(offset, offset + 40)
+        const payload = {
+          from: resendFrom,
+          to: [batch[0]],
+          ...(batch.length > 1 ? { bcc: batch.slice(1) } : {}),
+          subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 180),
+          text: String(text).slice(0, 6000),
+          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#18324a"><div style="padding:20px 24px;background:#173653;color:#fff;font-weight:700;font-size:20px">EDUCA · Gestión escolar</div><div style="padding:24px;line-height:1.6">${escapeEmailHtml(text).split('\n').map(line => `<p>${line || '&nbsp;'}</p>`).join('')}</div><div style="padding:16px 24px;border-top:1px solid #e4eaf0;color:#607386;font-size:12px">Este correo es una notificación automática de EDUCA. No respondas con contraseñas ni información financiera.</div></div>`,
+        }
+        if (process.env.SMTP_REPLY_TO) payload.reply_to = String(process.env.SMTP_REPLY_TO).trim()
+        const result = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15_000),
+        })
+        if (!result.ok) {
+          console.error('EDUCA email delivery failed:', `resend_http_${result.status}`)
+          return { sent, configured: true, failed: true }
+        }
+        sent += batch.length
+      }
+      return { sent, configured: true }
+    } catch (error) {
+      console.error('EDUCA email delivery failed:', error.name === 'TimeoutError' ? 'resend_timeout' : 'resend_delivery_error')
+      return { sent, configured: true, failed: true }
+    }
+  }
   let transport
   try { transport = await getEmailTransport() } catch (error) {
     console.error('EDUCA email transport initialization failed:', error.code || 'configuration_error')
@@ -123,20 +158,20 @@ async function sendEmail({ to, bcc, subject, text }) {
       const batch = recipients.slice(offset, offset + 40)
       await transport.sendMail({
         from, to: from, bcc: batch, ...(replyTo ? { replyTo } : {}),
-        subject: String(subject).slice(0, 180), text: String(text).slice(0, 6000),
+        subject: String(subject).replace(/[\r\n]+/g, ' ').slice(0, 180), text: String(text).slice(0, 6000),
         html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#18324a"><div style="padding:20px 24px;background:#173653;color:#fff;font-weight:700;font-size:20px">EDUCA · Gestión escolar</div><div style="padding:24px;line-height:1.6">${escapeEmailHtml(text).split('\n').map(line => `<p>${line || '&nbsp;'}</p>`).join('')}</div><div style="padding:16px 24px;border-top:1px solid #e4eaf0;color:#607386;font-size:12px">Este correo es una notificación automática de EDUCA. No respondas con contraseñas ni información financiera.</div></div>`,
       })
       sent += batch.length
     }
     return { sent, configured: true }
   } catch (error) {
-    console.error('EDUCA email delivery failed:', error.code || 'delivery_error')
+    console.error('EDUCA email delivery failed:', error.code || (error.name === 'TimeoutError' ? 'smtp_timeout' : 'delivery_error'))
     return { sent, configured: true, failed: true }
   }
 }
 async function sendEmailToUsers(schoolId, recipientIds, subject, text) {
   const ids = [...new Set((recipientIds || []).filter(Boolean))]
-  if (!ids.length) return { sent: 0, configured: Boolean(getEmailTransport()) }
+  if (!ids.length) return { sent: 0, configured: isEmailConfigured() }
   const recipients = []
   for (let offset = 0; offset < ids.length; offset += 500) {
     const batch = ids.slice(offset, offset + 500)
@@ -2411,7 +2446,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
     await db.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
       body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
-    let notified = 0, emailNotified = 0, emailConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
+    let notified = 0, emailNotified = 0, emailConfigured = isEmailConfigured()
     if (body.published && !previousPublication?.isPublished) {
       const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
         JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'

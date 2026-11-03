@@ -31,34 +31,22 @@ La base SQLite se crea en `data/educa.sqlite` de forma automática. `EDUCA_DB_PA
 5. En configuración de despliegue establece el comando de build `npm run build` y de inicio `npm start`. El servidor usa el puerto `PORT` que asigna Railway y sirve el frontend compilado y la API desde el mismo servicio.
 6. Genera un dominio público para el servicio de la aplicación. Al abrirlo por primera vez, usa la pantalla inicial para crear el colegio y el primer administrador. Después de completar la configuración, elimina `EDUCA_SETUP_KEY` de las variables y redepliega.
 
-### Correo saliente (SMTP)
+### Correo saliente
 
-Para habilitar avisos por correo, agrega estas variables al **servicio de la aplicación EDUCA en Railway**, no al servicio PostgreSQL. El webmail debe permitir envío SMTP y el proveedor debe entregar estos datos:
+Railway restringe SMTP saliente en los planes Free, Trial y Hobby. Si el servicio registra ETIMEDOUT conectando a un servidor SMTP, ese error suele indicar que la conexión de red no está disponible para el plan; cambiar la contraseña no lo corrige. Railway documenta SMTP saliente para Pro y superiores.
 
-- `SMTP_HOST`: servidor SMTP, por ejemplo el host indicado por tu proveedor de correo.
-- `SMTP_PORT`: normalmente `465` (SSL) o `587` (STARTTLS).
-- `SMTP_SECURE`: `true` para puerto 465; `false` para puerto 587.
-- `SMTP_USER`: dirección completa del buzón autenticado.
-- `SMTP_PASS`: contraseña SMTP o contraseña de aplicación del buzón.
-- `SMTP_FROM`: remitente verificado, por ejemplo `EDUCA <notificaciones@tu-dominio>`.
-- `SMTP_REPLY_TO` (opcional): correo que recibirá respuestas.
-- `EDUCA_PUBLIC_URL`: URL HTTPS pública de EDUCA para incluirla en el correo de restablecimiento.
+**Opción recomendada para Railway Hobby:** usa un proveedor transaccional con API HTTPS, por ejemplo Resend. Verifica educagestionescolar.study en Resend y publica los registros DNS SPF/DKIM que el proveedor indique. Después agrega estas variables al servicio EDUCA en Railway:
 
-No guardes credenciales SMTP en el código, en `src/`, en el APK ni en GitHub. Agrégalas desde **Railway → servicio EDUCA → Variables** y redepliega. En desarrollo local puedes usar un `.env` ignorado por Git.
+- RESEND_API_KEY: clave secreta creada en Resend.
+- RESEND_FROM: remitente del dominio verificado, por ejemplo EDUCA <info@educagestionescolar.study>.
+- SMTP_REPLY_TO (opcional): correo para respuestas.
+- EDUCA_PUBLIC_URL: URL HTTPS pública de EDUCA para incluirla en el correo de restablecimiento.
 
-Con SMTP configurado, EDUCA envía correos de solicitudes de restablecimiento a rectoría/administración; tras su aprobación envía el código de un solo uso al correo registrado (vence en 30 minutos) y avisa cuando la contraseña se actualiza. También manda avisos de eventos, comunicados y boletines publicados. Los destinatarios se envían en copia oculta. Si SMTP no está configurado, la bandeja interna y las notificaciones push existentes siguen funcionando.
+La aplicación prioriza Resend cuando están configurados RESEND_API_KEY y RESEND_FROM. Las claves permanecen en el backend; nunca las agregues al frontend, APK ni Git.
 
-La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base de Railway no se accede desde el navegador. Conserva activadas copias de seguridad en Railway y verifica la restauración antes de cargar datos escolares.
+**Si Railway es Pro o superior**, puedes usar el webmail por SMTP en el servicio EDUCA (no en PostgreSQL): SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS y SMTP_FROM. Para Spacemail: host mail.spacemail.com, puerto 465, SSL (SMTP_SECURE=true), y el correo completo como usuario. Usa la contraseña del buzón.
 
-## Alcance actual
-
-- Instituciones, usuario inicial, sesiones y estudiantes se guardan en SQLite local o PostgreSQL cuando `DATABASE_URL` está configurada.
-- Las contraseñas se almacenan usando scrypt con sal; la cookie de sesión es HttpOnly, SameSite Strict y tiene una duración limitada.
-- Las solicitudes que modifican datos se validan con `Origin` contra el origen recibido por el servidor o la lista explícita `EDUCA_ALLOWED_ORIGINS`; sin un origen válido, el backend las rechaza.
-- Cada usuario autenticado puede cambiar su contraseña desde el botón de perfil; se verifica la contraseña actual, se registran los cambios y se revocan las demás sesiones de la cuenta.
-- La API filtra los estudiantes por el colegio de la sesión y registra acciones administrativas y académicas en la bitácora. El administrador puede consultar la actividad desde **Bitácora**, filtrarla por acción o fecha y recorrerla por páginas; cada consulta queda limitada al colegio de su sesión.
-- El navegador no contiene usuarios ni contraseñas precargadas. El primer colegio lo crea quien opera el sistema.
-- La aplicación usa PostgreSQL cuando Railway provee `DATABASE_URL`; el entorno local usa SQLite. Antes de operar con menores, completa recuperación por correo, revisión de privacidad, copias de seguridad y políticas de conservación. No usar aún con datos reales.
+Con el proveedor de correo configurado, EDUCA envía solicitudes de recuperación a rectoría/administración; tras su aprobación manda el código de un solo uso al correo registrado (vence en 30 minutos) y avisa cuando la contraseña se actualiza. También manda avisos de eventos, comunicados y boletines publicados. Los destinatarios se envían en copia oculta. Si el proveedor de correo no está configurado, la bandeja interna y las notificaciones push existentes siguen funcionando.
 
 ### Usuarios y portales por rol
 
