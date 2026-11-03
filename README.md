@@ -31,6 +31,23 @@ La base SQLite se crea en `data/educa.sqlite` de forma automática. `EDUCA_DB_PA
 5. En configuración de despliegue establece el comando de build `npm run build` y de inicio `npm start`. El servidor usa el puerto `PORT` que asigna Railway y sirve el frontend compilado y la API desde el mismo servicio.
 6. Genera un dominio público para el servicio de la aplicación. Al abrirlo por primera vez, usa la pantalla inicial para crear el colegio y el primer administrador. Después de completar la configuración, elimina `EDUCA_SETUP_KEY` de las variables y redepliega.
 
+### Correo saliente (SMTP)
+
+Para habilitar avisos por correo, agrega estas variables al **servicio de la aplicación EDUCA en Railway**, no al servicio PostgreSQL. El webmail debe permitir envío SMTP y el proveedor debe entregar estos datos:
+
+- `SMTP_HOST`: servidor SMTP, por ejemplo el host indicado por tu proveedor de correo.
+- `SMTP_PORT`: normalmente `465` (SSL) o `587` (STARTTLS).
+- `SMTP_SECURE`: `true` para puerto 465; `false` para puerto 587.
+- `SMTP_USER`: dirección completa del buzón autenticado.
+- `SMTP_PASS`: contraseña SMTP o contraseña de aplicación del buzón.
+- `SMTP_FROM`: remitente verificado, por ejemplo `EDUCA <notificaciones@tu-dominio>`.
+- `SMTP_REPLY_TO` (opcional): correo que recibirá respuestas.
+- `EDUCA_PUBLIC_URL`: URL HTTPS pública de EDUCA para incluirla en el correo de restablecimiento.
+
+No guardes credenciales SMTP en el código, en `src/`, en el APK ni en GitHub. Agrégalas desde **Railway → servicio EDUCA → Variables** y redepliega. En desarrollo local puedes usar un `.env` ignorado por Git.
+
+Con SMTP configurado, EDUCA envía correos de solicitudes de restablecimiento a rectoría/administración; tras su aprobación envía el código de un solo uso al correo registrado (vence en 30 minutos) y avisa cuando la contraseña se actualiza. También manda avisos de eventos, comunicados y boletines publicados. Los destinatarios se envían en copia oculta. Si SMTP no está configurado, la bandeja interna y las notificaciones push existentes siguen funcionando.
+
 La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base de Railway no se accede desde el navegador. Conserva activadas copias de seguridad en Railway y verifica la restauración antes de cargar datos escolares.
 
 ## Alcance actual
@@ -59,7 +76,7 @@ La API aplica las migraciones `CREATE TABLE IF NOT EXISTS` al arrancar. La base 
 - Las entregas y los boletines se limitan en el backend al colegio, al estudiante vinculado y a las asignaturas de cada docente.
 - En **Calificaciones**, docentes asignados pueden adjuntar hasta 5 imágenes JPG, PNG o WEBP (4 MB cada una; 20 MB en total) y un enlace HTTPS de Google Forms (`forms.gle`, `forms.google.com` o `docs.google.com/forms`). Los archivos se guardan en la base de datos y solo se sirven mediante una ruta autenticada, dentro del colegio y curso correspondientes.
 - El autor o un administrador puede eliminar comunicaciones; la eliminación también las quita de las bandejas de destinatarios. En **Ver entregas**, el docente asignado puede borrar una entrega individual; su nota se conserva. Al eliminar una evaluación se borran de forma permanente sus notas, preguntas, intentos, imágenes y entregas vinculadas; la aplicación pide confirmación antes de hacerlo.
-- La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña olvidada no está disponible todavía; requiere configurar un proveedor de correo y un flujo de restablecimiento con token de un solo uso.
+- La contraseña inicial debe compartirse directamente por un canal seguro. La recuperación de contraseña olvidada requiere que SMTP esté configurado: rectoría o administración aprueba la solicitud y el código de un solo uso se envía al correo registrado.
 - Las páginas públicas `/privacidad` y `/terminos` presentan la información legal base. Completa los datos verificados del proveedor en `EDUCA_PROVIDER_NAME`, `EDUCA_PROVIDER_NIT`, `EDUCA_PROVIDER_ADDRESS`, `EDUCA_PRIVACY_EMAIL` y `EDUCA_PRIVACY_PHONE` antes de publicar la política como definitiva. Mientras falte algún dato, la página muestra un aviso de borrador. La plantilla `docs/legal/contrato-saas-plantilla.md` requiere diligenciamiento y revisión contractual.
 - Al iniciar sesión, cada usuario debe aceptar la versión vigente de los términos de uso. El servidor registra usuario, institución, versión y fecha, y deja un evento de auditoría. Esa aceptación no es consentimiento para tratamiento de datos ni reemplaza las autorizaciones que deba obtener la institución, especialmente para menores.
 - La política distingue el rol de cada parte según el tratamiento concreto. Las instituciones deben documentar las instrucciones al proveedor, las autorizaciones y el acuerdo de tratamiento aplicable antes de cargar datos reales.

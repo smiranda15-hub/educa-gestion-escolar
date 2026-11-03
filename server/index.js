@@ -92,6 +92,58 @@ const defaultSignatureRules = {
   academic_certificate: ['rector', 'academic_coordinator'], academic_report: ['group_director', 'academic_coordinator'], other: ['other', '']
 }
 let pushMessagingPromise
+let emailTransportPromise
+function getEmailTransport() {
+  const host = String(process.env.SMTP_HOST || '').trim()
+  const user = String(process.env.SMTP_USER || '').trim()
+  const pass = process.env.SMTP_PASS || ''
+  const port = Number(process.env.SMTP_PORT || 587)
+  if (!host || !user || !pass || !Number.isInteger(port) || port < 1 || port > 65535) return null
+  if (!emailTransportPromise) emailTransportPromise = import('nodemailer').then(({ default: nodemailer }) => nodemailer.createTransport({
+    host, port, secure: process.env.SMTP_SECURE === 'true' || port === 465,
+    auth: { user, pass }, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
+  }))
+  return emailTransportPromise
+}
+const escapeEmailHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+async function sendEmail({ to, bcc, subject, text }) {
+  const recipients = [...new Set([...(Array.isArray(to) ? to : [to]), ...(Array.isArray(bcc) ? bcc : [bcc])].filter(Boolean).map(value => String(value).trim()).filter(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) ]
+  if (!recipients.length) return { sent: 0, configured: Boolean(getEmailTransport()) }
+  let transport
+  try { transport = await getEmailTransport() } catch (error) {
+    console.error('EDUCA email transport initialization failed:', error.code || 'configuration_error')
+    return { sent: 0, configured: true, failed: true }
+  }
+  if (!transport) return { sent: 0, configured: false }
+  const from = String(process.env.SMTP_FROM || process.env.SMTP_USER).trim()
+  const replyTo = String(process.env.SMTP_REPLY_TO || '').trim()
+  let sent = 0
+  try {
+    for (let offset = 0; offset < recipients.length; offset += 40) {
+      const batch = recipients.slice(offset, offset + 40)
+      await transport.sendMail({
+        from, to: from, bcc: batch, ...(replyTo ? { replyTo } : {}),
+        subject: String(subject).slice(0, 180), text: String(text).slice(0, 6000),
+        html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#18324a"><div style="padding:20px 24px;background:#173653;color:#fff;font-weight:700;font-size:20px">EDUCA · Gestión escolar</div><div style="padding:24px;line-height:1.6">${escapeEmailHtml(text).split('\n').map(line => `<p>${line || '&nbsp;'}</p>`).join('')}</div><div style="padding:16px 24px;border-top:1px solid #e4eaf0;color:#607386;font-size:12px">Este correo es una notificación automática de EDUCA. No respondas con contraseñas ni información financiera.</div></div>`,
+      })
+      sent += batch.length
+    }
+    return { sent, configured: true }
+  } catch (error) {
+    console.error('EDUCA email delivery failed:', error.code || 'delivery_error')
+    return { sent, configured: true, failed: true }
+  }
+}
+async function sendEmailToUsers(schoolId, recipientIds, subject, text) {
+  const ids = [...new Set((recipientIds || []).filter(Boolean))]
+  if (!ids.length) return { sent: 0, configured: Boolean(getEmailTransport()) }
+  const recipients = []
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const batch = ids.slice(offset, offset + 500)
+    recipients.push(...await db.all(`SELECT email FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id IN (${batch.map(() => '?').join(',')})`, schoolId, ...batch))
+  }
+  return sendEmail({ bcc: recipients.map(item => item.email), subject, text })
+}
 async function getPushMessaging() {
   const encodedCredentials = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   if (!encodedCredentials) return null
@@ -256,7 +308,7 @@ async function route(request, response) {
       await db.transaction(async tx => {
         await tx.run(`INSERT INTO password_reset_requests (id, school_id, user_id, email, full_name_snapshot, role_snapshot)
           VALUES (?, ?, ?, ?, ?, ?)`, id, account.schoolId, account.id, email, account.fullName, account.role)
-        const reviewers = await tx.all(`SELECT id FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria')
+        const reviewers = await tx.all(`SELECT id, email FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria')
           AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
         reviewerIds = reviewers.map(reviewer => reviewer.id)
         for (const reviewer of reviewers) await tx.run(`INSERT INTO user_notifications (id, school_id, user_id, title, body, category)
@@ -264,6 +316,9 @@ async function route(request, response) {
         await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, NULL, ?)', account.schoolId, 'password_reset_requested')
       })
       await sendPushNotifications(account.schoolId, reviewerIds, 'Solicitud de recuperación de contraseña', 'Hay una solicitud pendiente en el panel de soporte.', 'password_reset', id)
+      const reviewerEmails = await db.all(`SELECT email FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria') AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
+      await sendEmail({ bcc: reviewerEmails.map(item => item.email), subject: 'EDUCA: solicitud de recuperación de contraseña', text: `Hay una solicitud de recuperación pendiente para ${account.fullName} (${account.role}).\nIngresa a EDUCA y revisa el módulo Solicitudes de contraseña. No compartas códigos por otros canales.` })
+      await sendEmail({ to: email, subject: 'EDUCA: recibimos tu solicitud de recuperación', text: `Hola ${account.fullName},\nRecibimos tu solicitud para recuperar el acceso a EDUCA. Rectoría o administración debe revisarla; si la aprueba, recibirás un código temporal en este correo.\n\nNo envíes tu contraseña actual ni compartas códigos.` })
     }
     return json(response, 200, { message: genericMessage })
   }
@@ -275,7 +330,7 @@ async function route(request, response) {
     const newPassword = String(body.newPassword || '')
     if (newPassword.length < 12 || newPassword.length > 128) return json(response, 400, { error: 'La nueva contraseña debe tener entre 12 y 128 caracteres.' })
     const school = slug ? await db.get('SELECT id FROM schools WHERE slug = ? AND is_active = 1 AND archived_at IS NULL', slug) : null
-    const requestRecord = school && email && code ? await db.get(`SELECT r.id, r.user_id AS "userId", r.reset_token_hash AS "resetTokenHash", u.id AS "activeUserId"
+    const requestRecord = school && email && code ? await db.get(`SELECT r.id, r.user_id AS "userId", r.reset_token_hash AS "resetTokenHash", u.id AS "activeUserId", u.email, u.full_name AS "fullName"
       FROM password_reset_requests r JOIN users u ON u.id = r.user_id
       WHERE r.school_id = ? AND r.email = ? AND r.status = 'Aprobada' AND r.token_expires_at > ?
       AND u.is_active = 1 AND u.deleted_at IS NULL ORDER BY r.reviewed_at DESC LIMIT 1`, school.id, email, new Date().toISOString()) : null
@@ -291,6 +346,7 @@ async function route(request, response) {
         completed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ? AND status = 'Aprobada'`, requestRecord.id, school.id)
       await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, ?, ?)', school.id, requestRecord.userId, 'password_reset_completed')
     })
+    await sendEmail({ to: requestRecord.email, subject: 'EDUCA: contraseña actualizada', text: `Hola ${requestRecord.fullName},\nLa contraseña de tu cuenta de EDUCA fue actualizada correctamente.\n\nSi no realizaste este cambio, contacta de inmediato a rectoría o administración de tu colegio.` })
     return json(response, 200, { message: 'La contraseña se actualizó. Ya puedes iniciar sesión.' })
   }
   const publicSchoolLogo = url.pathname.match(/^\/api\/schools\/([a-z0-9-]{1,48})\/logo$/i)
@@ -541,23 +597,26 @@ async function route(request, response) {
     const body = await readBody(request)
     const action = String(body.action || '')
     const note = String(body.note || '').trim().slice(0, 500)
-    const requestRecord = await db.get('SELECT id, user_id AS "userId", status FROM password_reset_requests WHERE id = ? AND school_id = ?', passwordResetRequestMatch[1], user.school_id)
+    const requestRecord = await db.get('SELECT id, user_id AS "userId", email, full_name_snapshot AS "fullName", status FROM password_reset_requests WHERE id = ? AND school_id = ?', passwordResetRequestMatch[1], user.school_id)
     if (!requestRecord) return json(response, 404, { error: 'No encontramos la solicitud.' })
     if (action === 'reject') {
       if (requestRecord.status !== 'Pendiente') return json(response, 409, { error: 'Solo se pueden rechazar solicitudes pendientes.' })
       await db.run(`UPDATE password_reset_requests SET status = 'Rechazada', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, user.id, note, requestRecord.id, user.school_id)
       await logAudit(user.school_id, user.id, 'password_reset_request_rejected')
+      await sendEmail({ to: requestRecord.email, subject: 'EDUCA: actualización de tu solicitud de acceso', text: `Hola ${requestRecord.fullName},\nLa solicitud para restablecer tu contraseña no fue aprobada. Contacta a rectoría o administración de tu institución para confirmar tu identidad y recibir ayuda.` })
       return json(response, 200, { updated: true, status: 'Rechazada' })
     }
     if (action !== 'approve' && action !== 'renew') return json(response, 400, { error: 'Acción de solicitud no válida.' })
     if (action === 'approve' && requestRecord.status !== 'Pendiente' || action === 'renew' && requestRecord.status !== 'Aprobada') return json(response, 409, { error: 'El estado de la solicitud ya cambió.' })
-    const target = await db.get('SELECT id FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL', requestRecord.userId, user.school_id)
+    const target = await db.get('SELECT id, email, full_name AS "fullName" FROM users WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL', requestRecord.userId, user.school_id)
     if (!target) return json(response, 409, { error: 'La cuenta asociada ya no está activa. Rechaza esta solicitud.' })
     const resetCode = randomBytes(24).toString('base64url')
     const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
     await db.run(`UPDATE password_reset_requests SET status = 'Aprobada', reset_token_hash = ?, token_expires_at = ?,
       reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, hashToken(resetCode), expiresAt, user.id, note, requestRecord.id, user.school_id)
     await logAudit(user.school_id, user.id, action === 'renew' ? 'password_reset_code_renewed' : 'password_reset_request_approved')
+    const resetPage = String(process.env.EDUCA_PUBLIC_URL || '').trim()
+    await sendEmail({ to: target.email, subject: 'EDUCA: código para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Tu código de un solo uso es:\n${resetCode}\n\nVence en 30 minutos. Abre EDUCA, selecciona “Olvidé mi contraseña” e ingresa el mismo colegio y correo de esta cuenta junto con este código.${resetPage ? `\n\nAcceso a EDUCA: ${resetPage}` : ''}\n\nSi no solicitaste este cambio, contacta al colegio y no compartas este código.` })
     return json(response, 200, { updated: true, status: 'Aprobada', resetCode, expiresAt })
   }
 
@@ -985,8 +1044,9 @@ async function route(request, response) {
     })
     const eventNoticeBody = `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ' · Todo el colegio'}`
     const pushResult = await sendPushNotifications(user.school_id, recipients, `Nuevo evento: ${title}`, eventNoticeBody, 'calendar', id)
+    const emailResult = await sendEmailToUsers(user.school_id, recipients, `EDUCA: nuevo evento · ${title}`, `Se publicó un evento escolar.\n\n${title}\nFecha: ${eventNoticeBody}\n\nIngresa a EDUCA para consultar los detalles y cualquier actualización.`)
     await logAudit(user.school_id, user.id, 'calendar_event_created')
-    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent, pushRegistered: pushResult.registered, pushConfigured: pushResult.configured, pushFailed: Boolean(pushResult.failed) })
+    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent, pushRegistered: pushResult.registered, pushConfigured: pushResult.configured, pushFailed: Boolean(pushResult.failed), emailNotified: emailResult.sent, emailConfigured: emailResult.configured, emailFailed: Boolean(emailResult.failed) })
   }
   const calendarDeleteMatch = url.pathname.match(/^\/api\/calendar\/([0-9a-f-]{36})$/i)
   if (calendarDeleteMatch && method === 'DELETE') {
@@ -1287,8 +1347,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       }
     })
     await sendPushNotifications(user.school_id, recipientUsers.map(item => item.id), `Nuevo comunicado: ${title}`, 'Abre EDUCA para leer el mensaje.', 'communication', id)
+    const emailResult = await sendEmailToUsers(user.school_id, recipientUsers.map(item => item.id), `EDUCA: nuevo comunicado · ${title}`, `Tienes un nuevo comunicado de tu institución: ${title}.\n\nIngresa a EDUCA para leer el contenido completo y consultar las novedades.`)
     await logAudit(user.school_id, user.id, `communication_created:${audience}`)
-    return json(response, 201, { created: true, id, recipientCount: recipientUsers.length })
+    return json(response, 201, { created: true, id, recipientCount: recipientUsers.length, emailNotified: emailResult.sent, emailConfigured: emailResult.configured, emailFailed: Boolean(emailResult.failed) })
   }
   const communicationReadMatch = url.pathname.match(/^\/api\/communications\/([0-9a-f-]{36})\/read$/i)
   if (communicationReadMatch && method === 'PATCH') {
@@ -2350,7 +2411,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
     await db.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
       body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
-    let notified = 0
+    let notified = 0, emailNotified = 0, emailConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
     if (body.published && !previousPublication?.isPublished) {
       const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
         JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
@@ -2365,11 +2426,13 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card')
       })
       const pushResult = await sendPushNotifications(user.school_id, recipients.map(item => item.id), notificationTitle, notificationBody, 'report_card')
+      const emailResult = await sendEmailToUsers(user.school_id, recipients.map(item => item.id), 'EDUCA: boletines disponibles', `${notificationTitle}\n\n${notificationBody}\n\nIngresa a EDUCA para consultar el documento oficial.`)
       notified = recipients.length
+      emailNotified = emailResult.sent; emailConfigured = emailResult.configured
       await logAudit(user.school_id, user.id, `grade_period_families_notified:${pushResult.sent}`)
     }
     await logAudit(user.school_id, user.id, body.published ? 'grade_period_published' : 'grade_period_unpublished')
-    return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt, notified })
+    return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt, notified, emailNotified, emailConfigured })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria', 'docente', 'acudiente'].includes(user.role)) return json(response, 403, { error: 'Las cuentas de estudiante no tienen acceso a boletines.' })
