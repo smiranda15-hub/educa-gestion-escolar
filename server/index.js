@@ -101,7 +101,7 @@ async function getPushMessaging() {
 }
 async function sendPushNotifications(schoolId, recipientIds, title, body, category = 'general', eventId = '') {
   const uniqueRecipients = [...new Set(recipientIds.filter(Boolean))]
-  if (!uniqueRecipients.length || !process.env.FIREBASE_SERVICE_ACCOUNT_JSON) return { sent: 0, configured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) }
+  if (!uniqueRecipients.length || !process.env.FIREBASE_SERVICE_ACCOUNT_JSON) return { sent: 0, registered: 0, configured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) }
   try {
     const messaging = await getPushMessaging()
     const tokens = await db.all(`SELECT d.token FROM device_push_tokens d JOIN users u ON u.id = d.user_id AND u.school_id = d.school_id
@@ -119,10 +119,10 @@ async function sendPushNotifications(schoolId, recipientIds, title, body, catego
       const invalidTokens = result.responses.flatMap((entry, index) => entry.success ? [] : ['messaging/registration-token-not-registered', 'messaging/invalid-registration-token'].includes(entry.error?.code) ? [batch[index].token] : [])
       if (invalidTokens.length) await db.run(`UPDATE device_push_tokens SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE token IN (${invalidTokens.map(() => '?').join(',')})`, ...invalidTokens)
     }
-    return { sent, configured: true }
+    return { sent, registered: tokens.length, configured: true }
   } catch (error) {
     console.error('EDUCA push notification delivery failed:', error.code || 'delivery_error')
-    return { sent: 0, configured: true, failed: true }
+    return { sent: 0, registered: 0, configured: true, failed: true }
   }
 }
 async function resolveDocumentSigners(schoolId, documentType, courseId = null) {
@@ -944,9 +944,12 @@ async function route(request, response) {
     if (course) {
       const staff = await db.all('SELECT user_id AS id FROM course_teachers WHERE course_id = ?', course.id)
       const families = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us JOIN students st ON st.id = us.student_id
-        WHERE st.school_id = ? AND st.status = 'Activo' AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
+        WHERE us.relationship = 'acudiente' AND st.school_id = ? AND st.status = 'Activo' AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
         OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`, user.school_id, course.id, course.academicYear, course.grade)
-      recipients = [...new Set([...staff, ...families].map(row => row.id).filter(id => id !== user.id))]
+      const students = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us JOIN students st ON st.id = us.student_id
+        WHERE us.relationship = 'estudiante' AND st.school_id = ? AND st.status = 'Activo' AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
+        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`, user.school_id, course.id, course.academicYear, course.grade)
+      recipients = [...new Set([...staff, ...families, ...students].map(row => row.id).filter(id => id !== user.id))]
     } else {
       recipients = (await db.all('SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id <> ?', user.school_id, user.id)).map(row => row.id)
     }
@@ -957,7 +960,7 @@ async function route(request, response) {
     const eventNoticeBody = `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ' · Todo el colegio'}`
     const pushResult = await sendPushNotifications(user.school_id, recipients, `Nuevo evento: ${title}`, eventNoticeBody, 'calendar', id)
     await logAudit(user.school_id, user.id, 'calendar_event_created')
-    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent })
+    return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent, pushRegistered: pushResult.registered, pushConfigured: pushResult.configured, pushFailed: Boolean(pushResult.failed) })
   }
   const calendarDeleteMatch = url.pathname.match(/^\/api\/calendar\/([0-9a-f-]{36})$/i)
   if (calendarDeleteMatch && method === 'DELETE') {

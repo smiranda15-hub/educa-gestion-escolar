@@ -141,7 +141,15 @@ function CalendarModule({ user, notify }) {
       const response = await fetch('/api/calendar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(payload) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'No se pudo guardar el evento.')
-      await load(); notify(`Evento creado. Se notificó a ${result.notified} persona${result.notified === 1 ? '' : 's'}.`); formElement.reset(); setNewEventType('Evento')
+      await load()
+      const internalCount = Number(result.notified || 0)
+      const pushCount = Number(result.pushNotified || 0)
+      let confirmation = `Evento creado. Aviso en EDUCA para ${internalCount} persona${internalCount === 1 ? '' : 's'}. `
+      if (!result.pushConfigured) confirmation += 'Las notificaciones a teléfonos aún no están configuradas en el servidor.'
+      else if (result.pushFailed) confirmation += 'No se pudo entregar el aviso push; revisa la configuración de Firebase en el servidor.'
+      else if (!result.pushRegistered) confirmation += 'Ningún destinatario tiene un teléfono registrado: abre la APK, inicia sesión y permite las notificaciones.'
+      else confirmation += `Notificación enviada a ${pushCount} teléfono${pushCount === 1 ? '' : 's'}${pushCount < result.pushRegistered ? ` (${result.pushRegistered - pushCount} sin entrega)` : ''}.`
+      notify(confirmation); formElement.reset(); setNewEventType('Evento')
     } catch (err) { setError(err.message || 'No se pudo conectar con el servidor.') }
     finally { setBusy(false) }
   }
