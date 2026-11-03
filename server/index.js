@@ -556,6 +556,17 @@ async function route(request, response) {
     const records = await db.all(`${selectRecords} LIMIT ? OFFSET ?`, ...params, limit, offset)
     return json(response, 200, { records, total, limit, offset })
   }
+  const documentControlMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})$/i)
+  if (documentControlMatch && method === 'DELETE') {
+    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden borrar registros anulados del control documental.' })
+    const record = await db.get('SELECT document_number AS "documentNumber", status FROM document_control_registry WHERE id = ? AND school_id = ?', documentControlMatch[1], user.school_id)
+    if (!record) return json(response, 404, { error: 'No encontramos ese registro documental en este colegio.' })
+    if (record.status !== 'Anulada') return json(response, 409, { error: 'Solo se pueden borrar registros cuyo documento ya esté anulado.' })
+    const deleted = await db.run("DELETE FROM document_control_registry WHERE id = ? AND school_id = ? AND status = 'Anulada'", documentControlMatch[1], user.school_id)
+    if (!deleted.changes && !deleted.rowCount) return json(response, 409, { error: 'El registro cambió de estado y no se pudo borrar.' })
+    await logAudit(user.school_id, user.id, `document_control_deleted:${record.documentNumber}`)
+    return json(response, 200, { deleted: true, documentNumber: record.documentNumber })
+  }
 
   if (url.pathname === '/api/audit-log/export' && method === 'GET') {
     if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden exportar la bitácora del colegio.' })
