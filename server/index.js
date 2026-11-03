@@ -2555,8 +2555,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const status = body.status === 'Retirado' ? 'Retirado' : 'Activo'
     if (name.length < 2 || name.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(documentNumber) || !['Registro civil', 'Tarjeta de identidad', 'Cédula de ciudadanía', 'Cédula de extranjería', 'Pasaporte', 'Permiso por protección temporal', 'Otro'].includes(documentType) || documentIssuedPlace.length < 3 || grade.length < 2 || grade.length > 40 || guardian.length < 2 || guardian.length > 100 || phone.length > 25) return json(response, 400, { error: 'Revisa el nombre, tipo y número de documento, lugar de expedición y datos básicos del estudiante.' })
     const id = randomUUID(), cardCode = randomUUID()
-    const photo = parseStudentPhoto(body.photo)
-    if (body.photo && !photo) return json(response, 400, { error: 'La foto debe ser JPG, PNG o WEBP válida y no superar 2 MB.' })
+    const photoProvided = body.photo && !(typeof body.photo === 'object' && Object.keys(body.photo).length === 0)
+    const photo = photoProvided ? parseStudentPhoto(body.photo) : null
+    if (photoProvided && !photo) return json(response, 400, { error: 'La foto debe ser JPG, PNG o WEBP válida y no superar 2 MB.' })
     try {
       await db.run('INSERT INTO students (id, school_id, full_name, document, document_type, document_issued_place, grade, guardian_name, guardian_phone, status, card_code, photo_content_type, photo_file_name, photo_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, name, documentNumber, documentType, documentIssuedPlace, grade, guardian, phone, status, cardCode, photo?.contentType || null, photo?.fileName || null, photo?.data || null)
     } catch (error) {
@@ -2582,8 +2583,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const phone = String(body.phone || '').trim()
     const status = String(body.status || '')
     if (name.length < 2 || name.length > 100 || !/^[\p{L}\p{N}.-]{3,30}$/u.test(documentNumber) || !['Registro civil', 'Tarjeta de identidad', 'Cédula de ciudadanía', 'Cédula de extranjería', 'Pasaporte', 'Permiso por protección temporal', 'Otro'].includes(documentType) || documentIssuedPlace.length < 3 || grade.length < 2 || grade.length > 40 || guardian.length < 2 || guardian.length > 100 || phone.length > 25 || !['Activo', 'Retirado'].includes(status)) return json(response, 400, { error: 'Revisa el nombre, tipo y número de documento, lugar de expedición y datos básicos del estudiante.' })
-    const photo = body.photo ? parseStudentPhoto(body.photo) : null
-    if (body.photo && !photo) return json(response, 400, { error: 'La foto debe ser JPG, PNG o WEBP válida y no superar 2 MB.' })
+    const photoProvided = body.photo && !(typeof body.photo === 'object' && Object.keys(body.photo).length === 0)
+    const photo = photoProvided ? parseStudentPhoto(body.photo) : null
+    if (photoProvided && !photo) return json(response, 400, { error: 'La foto debe ser JPG, PNG o WEBP válida y no superar 2 MB.' })
     try {
       if (photo) await db.run('UPDATE students SET full_name = ?, document = ?, document_type = ?, document_issued_place = ?, grade = ?, guardian_name = ?, guardian_phone = ?, status = ?, photo_content_type = ?, photo_file_name = ?, photo_data = ? WHERE id = ? AND school_id = ?', name, documentNumber, documentType, documentIssuedPlace, grade, guardian, phone, status, photo.contentType, photo.fileName, photo.data, id, user.school_id)
       else if (body.removePhoto === true) await db.run('UPDATE students SET full_name = ?, document = ?, document_type = ?, document_issued_place = ?, grade = ?, guardian_name = ?, guardian_phone = ?, status = ?, photo_content_type = NULL, photo_file_name = NULL, photo_data = NULL WHERE id = ? AND school_id = ?', name, documentNumber, documentType, documentIssuedPlace, grade, guardian, phone, status, id, user.school_id)
