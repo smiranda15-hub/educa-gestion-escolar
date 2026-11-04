@@ -2580,6 +2580,10 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (requestedCourseId && !reportCourse) return json(response, 403, { error: 'Ese curso no corresponde al historial académico del estudiante.' })
     const reportGrade = reportCourse?.grade || student.grade
     if (user.role === 'docente' && (!reportCourse || !await db.get('SELECT 1 FROM course_teachers ct WHERE ct.user_id = ? AND ct.course_id = ?', user.id, reportCourse.id))) return json(response, 403, { error: 'No tienes una asignatura asignada a ese estudiante para el año lectivo seleccionado.' })
+    const reportPeriods = ['Periodo 1', 'Periodo 2', 'Periodo 3', 'Periodo 4']
+    const visiblePeriods = ['acudiente', 'estudiante'].includes(user.role)
+      ? (await db.all('SELECT period FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND is_published = 1', user.school_id, academicYear)).map(item => item.period)
+      : reportPeriods
     const marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
         a.due_at AS "dueAt", a.weight_percent AS "weightPercent", rule.scale_min AS "scaleMin",
         rule.scale_max AS "scaleMax", rule.passing_score AS "passingScore", sg.score, sg.comment, sg.updated_at AS "updatedAt",
@@ -2588,36 +2592,49 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       LEFT JOIN academic_grade_rules rule ON rule.school_id = a.school_id AND rule.course_id = c.id AND rule.subject = a.subject AND rule.period = a.period
       LEFT JOIN student_grades sg ON sg.assessment_id = a.id AND sg.student_id = ?
-      WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ? AND (? = '' OR c.id = ?) AND a.period = ?
+      WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ? AND (? = '' OR c.id = ?) AND a.period IN (${visiblePeriods.map(() => '?').join(',') || "'__none__'"})
         AND (? <> 'docente' OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?))
-      ORDER BY a.subject, a.created_at, a.title`, student.id, user.school_id, user.school_id, reportGrade, academicYear, requestedCourseId, requestedCourseId, period, user.role, user.id)
+      ORDER BY a.subject, a.period, a.created_at, a.title`, student.id, user.school_id, user.school_id, reportGrade, academicYear, requestedCourseId, requestedCourseId, ...visiblePeriods, user.role, user.id)
     const bySubject = new Map()
     for (const mark of marks) {
       const score = mark.score === null ? null : Number(mark.score)
       const maxScore = Number(mark.maxScore)
-      if (!bySubject.has(mark.subject)) bySubject.set(mark.subject, { subject: mark.subject, teacherName: mark.teacherName || '', assessments: [], scoreWeights: [], scaleMin: mark.scaleMin === null ? null : Number(mark.scaleMin), scaleMax: mark.scaleMax === null ? null : Number(mark.scaleMax), passingScore: mark.passingScore === null ? null : Number(mark.passingScore) })
-      const summary = bySubject.get(mark.subject)
+      if (!bySubject.has(mark.subject)) bySubject.set(mark.subject, { subject: mark.subject, teacherName: mark.teacherName || '', byPeriod: new Map() })
+      const subject = bySubject.get(mark.subject)
+      if (!subject.byPeriod.has(mark.period)) subject.byPeriod.set(mark.period, { assessments: [], scoreWeights: [], scaleMin: mark.scaleMin === null ? null : Number(mark.scaleMin), scaleMax: mark.scaleMax === null ? null : Number(mark.scaleMax), passingScore: mark.passingScore === null ? null : Number(mark.passingScore) })
+      const summary = subject.byPeriod.get(mark.period)
       const weightPercent = Number(mark.weightPercent) || 100
       summary.assessments.push({ title: mark.title, score, maxScore, weightPercent, comment: mark.comment || '', updatedAt: mark.updatedAt, instructions: mark.instructions || '', dueAt: mark.dueAt })
       if (score !== null && maxScore > 0) summary.scoreWeights.push({ percent: score / maxScore * 100, weight: weightPercent })
     }
-    const subjects = [...bySubject.values()].map(summary => {
+    const periodGrades = summary => {
+      if (!summary) return { averagePercent: null, institutionalScore: null, result: null, gradedCount: 0, assessmentCount: 0 }
       const totalWeight = summary.scoreWeights.reduce((sum, item) => sum + item.weight, 0)
       const averagePercent = totalWeight ? Math.round(summary.scoreWeights.reduce((sum, item) => sum + item.percent * item.weight, 0) / totalWeight * 100) / 100 : null
       const institutionalScore = averagePercent === null || summary.scaleMin === null || summary.scaleMax === null ? null
         : Math.round((summary.scaleMin + averagePercent / 100 * (summary.scaleMax - summary.scaleMin)) * 100) / 100
+      return { averagePercent, institutionalScore, result: institutionalScore === null || summary.passingScore === null ? null : institutionalScore >= summary.passingScore ? 'Aprobado' : 'En seguimiento', gradedCount: summary.scoreWeights.length, assessmentCount: summary.assessments.length }
+    }
+    const subjects = [...bySubject.values()].map(subject => {
+      const periods = Object.fromEntries(reportPeriods.map(item => [item, periodGrades(subject.byPeriod.get(item))]))
+      const selectedSummary = subject.byPeriod.get(period)
+      const selected = periods[period]
+      const observedScores = reportPeriods.map(item => periods[item].institutionalScore).filter(value => value !== null)
+      const cumulativeScore = observedScores.length ? Math.round(observedScores.reduce((sum, value) => sum + value, 0) / observedScores.length * 100) / 100 : null
       return {
-        subject: summary.subject,
-        teacherName: summary.teacherName,
-        averagePercent,
-        scaleMin: summary.scaleMin,
-        scaleMax: summary.scaleMax,
-        passingScore: summary.passingScore,
-        institutionalScore,
-        result: institutionalScore === null || summary.passingScore === null ? null : institutionalScore >= summary.passingScore ? 'Aprobado' : 'En seguimiento',
-        gradedCount: summary.scoreWeights.length,
-        assessmentCount: summary.assessments.length,
-        assessments: summary.assessments,
+        subject: subject.subject,
+        teacherName: subject.teacherName,
+        averagePercent: selected.averagePercent,
+        scaleMin: selectedSummary?.scaleMin ?? null,
+        scaleMax: selectedSummary?.scaleMax ?? null,
+        passingScore: selectedSummary?.passingScore ?? null,
+        institutionalScore: selected.institutionalScore,
+        cumulativeScore,
+        result: selected.result,
+        gradedCount: selected.gradedCount,
+        assessmentCount: selected.assessmentCount,
+        assessments: selectedSummary?.assessments || [],
+        periods,
       }
     })
     const currentSignatures = await resolveDocumentSigners(user.school_id, 'report_card', reportCourse?.id || null)
@@ -2647,7 +2664,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     try { reportSignatures = JSON.parse(verification.signatureSnapshot || '[]') } catch { reportSignatures = currentSignatures }
     const reportSchool = await db.get('SELECT name, slug, address, contact_email AS "contactEmail", contact_phone AS "contactPhone", primary_color AS "primaryColor", logo_content_type AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, documentNumber: verification.documentNumber, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
+    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, periods: reportPeriods, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, documentNumber: verification.documentNumber, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
