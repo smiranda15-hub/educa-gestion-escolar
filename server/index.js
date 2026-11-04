@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
+import { randomBytes, randomUUID, randomInt, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { basename, extname, resolve, sep } from 'node:path'
 import { db, logAudit, migrate, databaseType, nextDocumentNumber, registerControlledDocument } from './db.js'
@@ -12,6 +12,7 @@ const sessionTtl = 8 * 60 * 60 * 1000
 const institutionManagerEmail = 'smiranda15@uan.edu.co'
 const loginAttempts = new Map()
 const passwordResetRequestAttempts = new Map()
+const passwordResetVerifyAttempts = new Map()
 const passwordResetReviewRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria'])
 const accountRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'])
 const institutionalManagerRoles = ['admin', 'rectoria']
@@ -194,6 +195,38 @@ async function sendEmailToUsers(schoolId, recipientIds, subject, text) {
     recipients.push(...await db.all(`SELECT email FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND id IN (${batch.map(() => '?').join(',')})`, schoolId, ...batch))
   }
   return sendInstitutionEmail(schoolId, { bcc: recipients.map(item => item.email), subject, text })
+}
+function normalizeColombianMobile(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (/^3\d{9}$/.test(digits)) return `+57${digits}`
+  if (/^573\d{9}$/.test(digits)) return `+${digits}`
+  return null
+}
+function maskPhone(value) {
+  const phone = normalizeColombianMobile(value)
+  return phone ? `+57 ••• ••• ${phone.slice(-4)}` : ''
+}
+async function sendSms(phone, content) {
+  const apiKey = String(process.env.INALAMBRIA_API_KEY || '').trim()
+  const destination = normalizeColombianMobile(phone)
+  if (!apiKey || !destination) return { sent: false, configured: Boolean(apiKey), reason: !apiKey ? 'not_configured' : 'invalid_phone' }
+  try {
+    const response = await fetch('https://api.inalambria.express/v1/messages/send', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients: [destination], content, async: true }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const result = await response.json().catch(() => ({}))
+    if (!response.ok || result.ok === false) {
+      console.error('EDUCA SMS delivery failed:', `inalambria_http_${response.status}`)
+      return { sent: false, configured: true, reason: 'provider_error' }
+    }
+    return { sent: true, configured: true, consumptionId: String(result.consumptionId || result.jobId || '').slice(0, 120) }
+  } catch (error) {
+    console.error('EDUCA SMS delivery failed:', error.name === 'TimeoutError' ? 'inalambria_timeout' : 'inalambria_delivery_error')
+    return { sent: false, configured: true, reason: 'delivery_error' }
+  }
 }
 async function getPushMessaging() {
   const encodedCredentials = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
@@ -380,6 +413,9 @@ async function route(request, response) {
     const code = String(body.code || '').trim()
     const newPassword = String(body.newPassword || '')
     if (newPassword.length < 12 || newPassword.length > 128) return json(response, 400, { error: 'La nueva contraseña debe tener entre 12 y 128 caracteres.' })
+    const verifyKey = `${request.socket.remoteAddress || 'unknown'}:${slug}:${email}`
+    const verifyAttempt = passwordResetVerifyAttempts.get(verifyKey)
+    if (verifyAttempt && verifyAttempt.expiresAt > Date.now() && verifyAttempt.count >= 5) return json(response, 429, { error: 'Se alcanzó el límite de intentos. Espera 15 minutos o solicita una nueva aprobación.' })
     const school = slug ? await db.get('SELECT id FROM schools WHERE slug = ? AND is_active = 1 AND archived_at IS NULL', slug) : null
     const requestRecord = school && email && code ? await db.get(`SELECT r.id, r.user_id AS "userId", r.reset_token_hash AS "resetTokenHash", u.id AS "activeUserId", u.email, u.full_name AS "fullName"
       FROM password_reset_requests r JOIN users u ON u.id = r.user_id
@@ -388,7 +424,13 @@ async function route(request, response) {
     const actualHash = Buffer.from(hashToken(code), 'hex')
     const expectedHash = Buffer.from(requestRecord?.resetTokenHash || '', 'hex')
     const validCode = expectedHash.length === actualHash.length && timingSafeEqual(expectedHash, actualHash)
-    if (!requestRecord || !validCode) return json(response, 400, { error: 'No se pudo validar la solicitud. Revisa institución, correo y código o solicita una nueva revisión.' })
+    if (!requestRecord || !validCode) {
+      if (!verifyAttempt || verifyAttempt.expiresAt <= Date.now()) passwordResetVerifyAttempts.set(verifyKey, { count: 1, expiresAt: Date.now() + 15 * 60_000 })
+      else verifyAttempt.count += 1
+      if (passwordResetVerifyAttempts.size > 10_000) for (const [key, value] of passwordResetVerifyAttempts) if (value.expiresAt <= Date.now()) passwordResetVerifyAttempts.delete(key)
+      return json(response, 400, { error: 'No se pudo validar la solicitud. Revisa institución, correo y código o solicita una nueva revisión.' })
+    }
+    passwordResetVerifyAttempts.delete(verifyKey)
     const passwordHash = await hashPassword(newPassword)
     await db.transaction(async tx => {
       await tx.run('UPDATE users SET password_hash = ? WHERE id = ? AND school_id = ?', passwordHash, requestRecord.userId, school.id)
@@ -635,11 +677,12 @@ async function route(request, response) {
 
   if (url.pathname === '/api/password-reset-requests' && method === 'GET') {
     if (!passwordResetReviewRoles.has(user.role)) return json(response, 403, { error: 'Solo rectoría y administración pueden revisar estas solicitudes.' })
-    const requests = await db.all(`SELECT r.id, r.email, r.full_name_snapshot AS "fullName", r.role_snapshot AS role,
+    const requests = await db.all(`SELECT r.id, r.email, r.full_name_snapshot AS "fullName", r.role_snapshot AS role, u.contact_phone AS phone,
       r.status, r.requested_at AS "requestedAt", r.reviewed_at AS "reviewedAt", r.review_note AS "reviewNote",
       r.token_expires_at AS "tokenExpiresAt", reviewer.full_name AS "reviewerName"
-      FROM password_reset_requests r LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
+      FROM password_reset_requests r JOIN users u ON u.id = r.user_id LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
       WHERE r.school_id = ? ORDER BY CASE r.status WHEN 'Pendiente' THEN 0 WHEN 'Aprobada' THEN 1 ELSE 2 END, r.requested_at DESC LIMIT 100`, user.school_id)
+    for (const item of requests) item.phone = maskPhone(item.phone)
     return json(response, 200, { requests })
   }
   const passwordResetRequestMatch = url.pathname.match(/^\/api\/password-reset-requests\/([0-9a-f-]{36})$/i)
@@ -659,11 +702,11 @@ async function route(request, response) {
     }
     if (action !== 'approve' && action !== 'renew') return json(response, 400, { error: 'Acción de solicitud no válida.' })
     if (action === 'approve' && requestRecord.status !== 'Pendiente' || action === 'renew' && requestRecord.status !== 'Aprobada') return json(response, 409, { error: 'El estado de la solicitud ya cambió.' })
-    const target = await db.get(`SELECT u.id, u.email, u.full_name AS "fullName", s.slug AS "schoolSlug"
+    const target = await db.get(`SELECT u.id, u.email, u.full_name AS "fullName", u.contact_phone AS phone, s.slug AS "schoolSlug", s.name AS "schoolName"
       FROM users u JOIN schools s ON s.id = u.school_id
       WHERE u.id = ? AND u.school_id = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, requestRecord.userId, user.school_id)
     if (!target) return json(response, 409, { error: 'La cuenta asociada ya no está activa. Rechaza esta solicitud.' })
-    const resetCode = randomBytes(24).toString('base64url')
+    const resetCode = String(randomInt(10_000_000, 100_000_000))
     const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString()
     await db.run(`UPDATE password_reset_requests SET status = 'Aprobada', reset_token_hash = ?, token_expires_at = ?,
       reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ? AND school_id = ?`, hashToken(resetCode), expiresAt, user.id, note, requestRecord.id, user.school_id)
@@ -671,8 +714,10 @@ async function route(request, response) {
     const resetPage = String(process.env.EDUCA_PUBLIC_URL || '').trim().replace(/\/+$/, '')
     const resetParams = new URLSearchParams({ school: target.schoolSlug, email: target.email, token: resetCode })
     const resetLink = resetPage ? `${resetPage}/#restablecer?${resetParams.toString()}` : ''
-    await sendInstitutionEmail(user.school_id, { to: target.email, subject: 'Enlace para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Usa este enlace seguro para crear una nueva contraseña:\n${resetLink || 'Solicita a rectoría o administración el enlace de recuperación de EDUCA.'}\n\nEl enlace vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, contacta al colegio. No compartas el enlace.` })
-    return json(response, 200, { updated: true, status: 'Aprobada', resetCode, expiresAt })
+    await sendInstitutionEmail(user.school_id, { to: target.email, subject: 'Enlace para restablecer tu contraseña', text: `Hola ${target.fullName},\nRectoría o administración aprobó tu solicitud. Usa este enlace seguro para crear una nueva contraseña:\n${resetLink || 'Abre la opción Olvidé mi contraseña en EDUCA e ingresa el código recibido por SMS.'}\n\nEl código vence en 30 minutos y solo puede usarse una vez. Si no solicitaste este cambio, contacta al colegio. No compartas el enlace ni el código.` })
+    const smsResult = await sendSms(target.phone, `${target.schoolName}: tu código EDUCA para restablecer la contraseña es ${resetCode}. Vence en 30 minutos y es de un solo uso. No lo compartas.`)
+    if (!smsResult.sent) await logAudit(user.school_id, user.id, `password_reset_sms_not_sent:${smsResult.reason || 'unknown'}`)
+    return json(response, 200, { updated: true, status: 'Aprobada', expiresAt, smsSent: smsResult.sent, smsConfigured: smsResult.configured, phoneHint: maskPhone(target.phone) })
   }
 
   if (url.pathname === '/api/profile' && method === 'GET') {
