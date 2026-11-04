@@ -562,3 +562,115 @@ html, body, #root { min-height: 100dvh; }
   .institutional-gallery-art { width: 52px; height: 54px; }
   .institutional-gallery-placeholder .button { grid-column: 1/-1; justify-content: center; }
 }
+
+
+/* EDUCA design system ? shared tokens and interaction language */
+:root {
+  --edu-brand-950: #17324f;
+  --edu-brand-800: #245a78;
+  --edu-brand-700: #286b83;
+  --edu-brand-500: #4ca5ac;
+  --edu-brand-100: #e9f4f4;
+  --edu-canvas: #f3f6fa;
+  --edu-surface: #ffffff;
+  --edu-ink: #17324f;
+  --edu-muted: #64758a;
+  --edu-line: #dce5ee;
+  --edu-radius-sm: 9px;
+  --edu-radius-md: 13px;
+  --edu-radius-lg: 17px;
+  --edu-shadow-1: 0 2px 8px rgba(23, 50, 79, .045);
+  --edu-shadow-2: 0 12px 32px rgba(23, 50, 79, .085);
+  --edu-focus: 0 0 0 3px rgba(76, 165, 172, .2);
+}
+
+.brand-mark { overflow: hidden; padding: 0; }
+.brand-edu-symbol { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.educa-brand-symbol { display: block; flex: 0 0 40px; width: 40px; height: 40px; border-radius: 13px; box-shadow: 0 5px 14px rgba(23, 50, 79, .12); }
+.institution-entry-brand-mark { overflow: hidden; }
+
+html { scroll-behavior: smooth; }
+body { color: var(--edu-ink); background: var(--edu-canvas); }
+::selection { color: #12364d; background: #bce7e2; }
+:where(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--edu-brand-500); outline-offset: 3px; }
+:where(input, select, textarea) { accent-color: var(--edu-brand-700); }
+
+.sidebar { background: var(--edu-brand-950); border-right-color: #254461; box-shadow: 5px 0 24px rgba(18, 38, 58, .07); }
+.brand { min-height: 42px; }
+.brand-name { letter-spacing: -.9px; }
+.nav-section { margin-bottom: 16px; }
+.nav-heading { letter-spacing: .12em; }
+.nav-item { border-radius: 10px; }
+.nav-item.selected { background: #e8f2f7; color: #194965; box-shadow: inset 3px 0 #4ca5ac; }
+.school-switch { border-radius: var(--edu-radius-md); }
+.sidebar-search { border-radius: 11px; }
+
+.main-area { background: radial-gradient(ellipse at 100% 0%, rgba(76, 165, 172, .07), transparent 32%), var(--edu-canvas); }
+.topbar { border-bottom-color: var(--edu-line); box-shadow: 0 2px 10px rgba(23, 50, 79, .025); }
+.breadcrumb > span:last-child { color: var(--edu-brand-950); }
+.content-wrap { max-width: 1620px; }
+.welcome-row h1, .students-title h1, .panel-heading h2, .dialog-heading h2 { color: var(--edu-brand-950); }
+.welcome-row h1, .students-title h1 { letter-spacing: -.04em; }
+.welcome-sub { color: #6d8093; }
+
+:where(.stat-card, .panel, .student-table-wrap, .school-settings-card, .course-card, .report-card-document, .communication-card, .assignment-card, .portal-student-summary, .role-home, .institutional-portal-card) {
+  border-color: #dfe7ee;
+  border-radius: var(--edu-radius-md);
+  box-shadow: var(--edu-shadow-1);
+}
+:where(.panel, .stat-card, .course-card, .communication-card, .assignment-card) { background: var(--edu-surface); }
+.stat-card { transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease; }
+.stat-card:hover { border-color: #c9dce3; box-shadow: var(--edu-shadow-2); transform: translateY(-2px); }
+.panel { padding: 20px; }
+.panel-heading h2 { font-size: 15px; }
+
+.button, .login-submit, .institution-nav-access, .institution-enter-button, .institution-outline-button {
+  border-radius: 10px;
+  font-weight: 650;
+  transition: transform .16s ease, background-color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.button-primary, .login-submit, .institution-nav-access, .institution-enter-button {
+  color: #fff;
+  border-color: var(--edu-brand-700);
+  background: var(--edu-brand-700);
+  box-shadow: 0 4px 12px rgba(40, 107, 131, .16);
+}
+.button-primary:hover, .login-submit:hover, .institution-nav-access:hover, .institution-enter-button:hover {
+  color: #fff;
+  border-color: #205873;
+  background: #205873;
+  box-shadow: 0 7px 17px rgba(32, 88, 115, .2);
+  transform: translateY(-1px);
+}
+.button-soft { border-color: var(--edu-line); border-radius: 10px; color: #36546b; }
+.button-soft:hover { border-color: #c8d9e2; background: #f7fafb; }
+.button:disabled, .login-submit:disabled { cursor: not-allowed; opacity: .58; transform: none; box-shadow: none; }
+
+:where(.students-page input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=color]), .students-page select, .students-page textarea, .student-filter select, .student-dialog input, .student-dialog select, .student-dialog textarea, .login-input-wrap, .school-picker, .institution-chooser-search) {
+  border-radius: 10px;
+}
+:where(.students-page input, .students-page select, .students-page textarea, .student-filter select, .student-dialog input, .student-dialog select, .student-dialog textarea, .login-input-wrap, .school-picker):focus-within,
+:where(.students-page input, .students-page select, .students-page textarea, .student-filter select, .student-dialog input, .student-dialog select, .student-dialog textarea):focus {
+  border-color: var(--edu-brand-500);
+  box-shadow: var(--edu-focus);
+  outline: 0;
+}
+.student-table-wrap { border-radius: var(--edu-radius-md); }
+.student-table th { background: #f1f5f8; color: #526a7e; }
+.student-table tbody tr:hover { background: #f7fafb; }
+.student-status { border-radius: 999px; }
+.student-dialog, .legal-accept-dialog { border-radius: var(--edu-radius-lg); box-shadow: var(--edu-shadow-2); }
+.login-card { border: 1px solid var(--edu-line); border-radius: 20px; box-shadow: 0 18px 52px rgba(23, 50, 79, .11); }
+.login-card-icon { background: var(--edu-brand-100); color: var(--edu-brand-700); }
+.login-security { color: #5f7888; }
+.toast { background: var(--edu-brand-950); }
+
+@media (max-width: 680px) {
+  .panel { padding: 15px; }
+  .educa-brand-symbol { flex-basis: 36px; width: 36px; height: 36px; }
+  .student-dialog { border-radius: 15px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition-duration: .01ms !important; }
+}
