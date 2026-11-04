@@ -11,6 +11,7 @@ import {
   PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X,
 } from 'lucide-react'
 import './style.css'
+import './edu-design.css'
 import { LEGAL_TERMS_VERSION, LegalDocumentPage, TermsAcceptanceDialog } from './legal.jsx'
 
 const navGroups = [
