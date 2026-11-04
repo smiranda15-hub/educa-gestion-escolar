@@ -349,3 +349,149 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .students-title h1, .welcome-row h1 { font-size: 23px; }
 }
 
+/* Readability pass: the original modules used very small helper/table text. */
+.app-shell { font-size: 15px; line-height: 1.55; }
+.sidebar .brand-name { font-size: 23px; }
+.school-copy strong { font-size: 13px; line-height: 1.35; }
+.school-copy span { font-size: 12px; }
+.sidebar-search input { font-size: 13px; }
+.nav-heading { font-size: 10.5px; }
+.nav-item { font-size: 13.5px; }
+.user-copy strong { font-size: 12.5px; }
+.user-copy span { font-size: 11.5px; }
+.logout-button { font-size: 13px; }
+.breadcrumb { font-size: 13px; }
+.search-box input { font-size: 13px; }
+.content-wrap { line-height: 1.55; }
+.students-title h1, .welcome-row h1 { font-size: clamp(27px, 2.1vw, 33px); }
+.welcome-sub, .students-title .welcome-sub { font-size: 14px; }
+.eyebrow { font-size: 10.5px; }
+.students-scope, .form-scope, .login-message { font-size: 13px; }
+.button { min-height: 42px; font-size: 13px; }
+.student-filter, .school-settings-form label, .student-dialog form > label,
+.login-label, .calendar-form label, .certificate-form label, .staff-profile-form label {
+  font-size: 13px;
+}
+.student-filter input, .student-filter select,
+.students-page input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+.students-page select, .students-page textarea,
+.student-dialog input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.student-dialog select, .student-dialog textarea,
+.school-settings-form input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+.school-settings-form select, .school-settings-form textarea,
+.calendar-form input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.calendar-form select, .calendar-form textarea,
+.staff-profile-form input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.staff-profile-form select, .staff-profile-form textarea {
+  font-size: 14px;
+}
+.field-hint, .optional-label { font-size: 12px; }
+.students-toolbar, .report-filters, .audit-filters, .enrollment-toolbar { font-size: 13px; }
+.student-table th { font-size: 11px; }
+.student-table td { font-size: 13px; }
+.student-table td strong { font-size: 13px; }
+.history-secondary { font-size: 12px; }
+.student-status { font-size: 11px; }
+.students-empty strong, .dashboard-no-data strong { font-size: 15px; }
+.students-empty p, .dashboard-no-data p { font-size: 13px; }
+.panel-heading h2, .students-page h2 { font-size: 16px; }
+.stat-top { font-size: 13px; }
+.stat-number { font-size: 29px; }
+.stat-foot { font-size: 11.5px; }
+.role-home h1 { font-size: 29px; }
+.role-home > p, .role-home-note { font-size: 13px; }
+.portal-student-card strong { font-size: 14px; }
+.portal-student-card span { font-size: 12px; }
+.login-top-note { font-size: 12px; }
+.login-card-heading h2 { font-size: 22px; }
+.login-card-heading p { font-size: 13px; }
+.login-overline { font-size: 11px; }
+.login-intro > p { font-size: 15px; line-height: 1.7; }
+.login-benefits strong { font-size: 13px; }
+.login-benefits small { font-size: 12px; line-height: 1.45; }
+.password-label-row .forgot-link { font-size: 12px; }
+.login-divider, .login-help { font-size: 12px; }
+.institution-chooser-card-copy strong { font-size: 14px; }
+.institution-chooser-card-copy small { font-size: 12px; }
+.institution-chooser-security { font-size: 12px; }
+.login-form input:not([type="checkbox"]):not([type="radio"]) { font-size: 14px; }
+.login-selected-institution small { font-size: 11px; }
+.login-selected-institution strong { font-size: 13px; }
+.login-selected-institution button { min-height: 40px; padding: 8px 11px; font-size: 12px; font-weight: 700; }
+.login-submit { min-height: 48px; font-size: 14px; }
+.login-help, .login-security { font-size: 12px; }
+.login-back-campus {
+  min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 8px 12px; border: 1px solid var(--edu-line); border-radius: 9px;
+  color: #365f72; background: #fff; font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.2; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.login-back-campus:hover { color: var(--edu-primary-strong); background: #edf6f6; border-color: #c2dcdf; }
+.login-back-campus svg { transform: rotate(180deg); }
+.login-top { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; }
+.login-brand { justify-self: start; }
+.login-back-campus { justify-self: center; }
+.login-top-note { justify-self: end; }
+
+/* The printable sheet remains compact on paper; its on-screen preview is readable. */
+.report-card-document { font-size: 13px; }
+.report-card-header-classic { min-height: 140px; }
+.report-card-header-classic .report-card-institution-logo { width: 92px; height: 92px; }
+.report-card-school-identity > span { font-size: 11px; }
+.report-card-school-identity h2 { font-size: 21px; line-height: 1.3; }
+.report-card-school-identity small { font-size: 11px; }
+.report-card-school-identity > strong { font-size: 16px; }
+.report-card-header-classic .report-card-period strong { font-size: 14px; }
+.report-card-header-classic .report-card-period span { font-size: 11px; }
+.report-card-student-grid .report-student-field { min-height: 58px; padding: 9px 11px; }
+.report-card-student-grid .report-student-field > span { font-size: 10px; }
+.report-card-student-grid .report-student-field > strong { font-size: 13px; line-height: 1.4; }
+.report-card-grade-grid { font-size: 12px; }
+.report-card-grade-grid th, .report-card-grade-grid td { padding: 8px 6px; }
+.report-card-grade-grid thead th { font-size: 11px; }
+.report-card-grade-grid tbody .report-grade-row > th { font-size: 12px; }
+.report-card-grade-grid tbody .report-grade-row > th small { font-size: 10px; }
+.report-card-grade-grid .report-grade-number { font-size: 12px; }
+.report-card-grade-grid .report-grade-descriptor { font-size: 10px; }
+.report-card-grade-grid .report-assessments-row summary { font-size: 11px; }
+.report-assessment-detail { font-size: 11px; }
+.report-card-grid-note, .report-card-disclaimer { font-size: 11px; line-height: 1.55; }
+.report-card-signature strong { font-size: 12px; }
+.report-card-signature small, .report-card-qr span, .report-card-qr small { font-size: 10px; line-height: 1.45; }
+
+@media (max-width: 680px) {
+  .login-top { grid-template-columns: 1fr auto; gap: 8px; }
+  .login-back-campus { min-height: 42px; padding: 8px 10px; font-size: 11px; }
+  .login-top-note { display: none; }
+  .student-filter input, .student-filter select,
+  .students-page input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+  .students-page select, .student-dialog input, .student-dialog select,
+  .login-input-wrap, .login-form input { min-height: 46px; }
+  .student-table th { font-size: 10.5px; }
+  .student-table td { font-size: 12.5px; }
+  .report-card-document { padding: 16px 12px; }
+  .report-card-grade-grid { min-width: 820px; }
+  .report-card-grid-wrap { margin-inline: -2px; }
+  .report-card-header-classic .report-card-institution-logo { width: 60px; height: 60px; }
+  .report-card-school-identity h2 { font-size: 16px; }
+  .report-card-school-identity > strong { font-size: 12px; }
+}
+
+@media print {
+  .report-card-document { font-size: 9px; }
+  .report-card-header-classic { min-height: 0; }
+  .report-card-header-classic .report-card-institution-logo { width: 68px; height: 68px; }
+  .report-card-school-identity > span { font-size: 8px; }
+  .report-card-school-identity h2 { font-size: 15px; }
+  .report-card-school-identity small { font-size: 8px; }
+  .report-card-school-identity > strong { font-size: 11px; }
+  .report-card-student-grid .report-student-field { min-height: 0; padding: 5px; }
+  .report-card-student-grid .report-student-field > span { font-size: 7px; }
+  .report-card-student-grid .report-student-field > strong { font-size: 8px; }
+  .report-card-grade-grid { font-size: 8px; }
+  .report-card-grade-grid th, .report-card-grade-grid td { padding: 4px 2px; }
+  .report-card-grade-grid thead th { font-size: 7px; }
+  .report-card-grade-grid .report-grade-descriptor { font-size: 6px; }
+  .report-card-grid-note, .report-card-disclaimer { font-size: 7px; }
+}
+
