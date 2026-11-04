@@ -674,3 +674,71 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition-duration: .01ms !important; }
 }
+
+
+/* Reporte acad?mico: presentaci?n institucional para lectura, descarga e impresi?n */
+.report-card-document {
+  max-width: 980px;
+  padding: 34px 38px;
+  border-radius: 18px;
+  color: #223e53;
+  box-shadow: 0 20px 54px rgba(23, 50, 79, .11);
+}
+.report-card-header {
+  position: relative;
+  gap: 18px;
+  padding-bottom: 20px;
+  border-bottom: 3px solid var(--document-accent);
+}
+.report-card-header::after {
+  position: absolute;
+  right: 0;
+  bottom: -3px;
+  width: 22%;
+  border-bottom: 3px solid color-mix(in srgb, var(--document-accent) 35%, #8fd0c0);
+  content: "";
+}
+.report-card-header h2 { font-size: clamp(18px, 2vw, 23px); letter-spacing: -.04em; }
+.report-card-institution-logo { width: 68px; height: 68px; border-radius: 17px; box-shadow: 0 4px 12px rgba(23, 50, 79, .07); }
+.report-card-period { min-width: 145px; padding: 10px 12px; border: 1px solid #e2ebef; border-radius: 12px; background: #f7fafb; }
+.report-card-period strong { font-size: 14px; }
+.report-card-student { gap: 13px; margin-top: 16px; border: 1px solid #e1e9ee; border-radius: 13px; background: #f7fafb; }
+.report-card-student > div { min-width: 0; }
+.report-card-student > div > span { color: #708697; letter-spacing: .09em; }
+.report-card-student strong { color: #203d54; line-height: 1.4; overflow-wrap: anywhere; }
+.report-card-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0 6px; }
+.report-card-summary article { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 12px 13px; border: 1px solid #e2eaef; border-radius: 12px; background: #fff; }
+.report-card-summary article > span { color: #708394; font-size: 9px; font-weight: 700; letter-spacing: .045em; text-transform: uppercase; }
+.report-card-summary article > strong { color: #1d526c; font: 750 21px/1.1 Manrope, sans-serif; font-variant-numeric: tabular-nums; }
+.report-card-summary article > strong small { color: #77909d; font: 600 12px 'DM Sans', sans-serif; }
+.report-card-summary article > small { color: #8999a4; font-size: 8px; line-height: 1.4; }
+.report-subject { border-color: #dfe8ed; border-radius: 12px; }
+.report-subject-heading { min-height: 58px; padding: 11px 14px; }
+.report-subject-heading h3 { font-size: 13px; letter-spacing: -.01em; }
+.report-subject-heading > strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.report-mark-table { font-size: 10px; }
+.report-mark-table thead { display: table-header-group; }
+.report-mark-table th { padding: 9px 11px; background: #f5f8fa; color: #526d80; font-size: 8px; }
+.report-mark-table td { padding: 9px 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.report-card-disclaimer { margin-top: 19px; border: 1px solid #dfeae7; border-left: 4px solid #55a995; border-radius: 11px; }
+.report-card-document-footer { grid-template-columns: repeat(2, minmax(130px, 1fr)) minmax(110px, auto); align-items: end; gap: 18px; }
+.report-card-signature { min-height: 95px; align-content: end; }
+.report-card-signature strong { color: #294a60; font-size: 10px; text-align: center; }
+.report-card-signature small { color: #708594; text-align: center; }
+.report-card-qr { padding: 9px; border: 1px solid #e1e9ee; border-radius: 12px; background: #fbfcfd; }
+.report-card-qr svg { width: 78px; height: 78px; }
+.report-card-qr > small:last-child { color: #8495a0; }
+@media (max-width: 760px) {
+  .report-card-document { padding: 23px 18px; }
+  .report-card-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-card-document-footer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-card-qr { grid-column: 1 / -1; justify-self: center; }
+}
+@media print {
+  @page { size: A4; margin: 12mm; }
+  .report-card-document { position: static !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+  .report-card-header, .report-card-student, .report-card-summary, .report-subject-heading, .report-card-disclaimer, .report-card-document-footer { break-inside: avoid; }
+  .report-subject { break-inside: avoid; }
+  .report-mark-table tr { break-inside: avoid; }
+  .report-card-summary article, .report-card-period, .report-subject-heading, .report-card-disclaimer, .report-card-qr { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
