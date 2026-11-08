@@ -332,6 +332,9 @@ export async function migrate() {
       integrity_monitoring INTEGER NOT NULL DEFAULT 0,
       is_published INTEGER NOT NULL DEFAULT 1,
       external_form_url TEXT,
+      video_url TEXT,
+      time_limit_minutes INTEGER,
+      grading_mode TEXT NOT NULL DEFAULT 'auto',
       weight_percent REAL NOT NULL DEFAULT 100 CHECK (weight_percent > 0 AND weight_percent <= 100),
       max_score REAL NOT NULL CHECK (max_score > 0),
       created_by TEXT NOT NULL REFERENCES users(id),
@@ -697,6 +700,9 @@ export async function migrate() {
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'delivery_mode'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'is_published'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'external_form_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'video_url'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN video_url TEXT')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'time_limit_minutes'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN time_limit_minutes INTEGER')
+    if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'grading_mode'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'auto'")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'activity_type'")) await db.exec("ALTER TABLE grade_assessments ADD COLUMN activity_type TEXT NOT NULL DEFAULT 'assignment'")
     if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'grade_assessments' AND column_name = 'integrity_monitoring'")) await db.exec('ALTER TABLE grade_assessments ADD COLUMN integrity_monitoring INTEGER NOT NULL DEFAULT 0')
   } else {
@@ -751,6 +757,9 @@ export async function migrate() {
     if (!assessmentColumns.some(column => column.name === 'delivery_mode')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'file'")
     if (!assessmentColumns.some(column => column.name === 'is_published')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1')
     if (!assessmentColumns.some(column => column.name === 'external_form_url')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN external_form_url TEXT')
+    if (!assessmentColumns.some(column => column.name === 'video_url')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN video_url TEXT')
+    if (!assessmentColumns.some(column => column.name === 'time_limit_minutes')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN time_limit_minutes INTEGER')
+    if (!assessmentColumns.some(column => column.name === 'grading_mode')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'auto'")
     if (!assessmentColumns.some(column => column.name === 'activity_type')) await db.exec("ALTER TABLE grade_assessments ADD COLUMN activity_type TEXT NOT NULL DEFAULT 'assignment'")
     if (!assessmentColumns.some(column => column.name === 'integrity_monitoring')) await db.exec('ALTER TABLE grade_assessments ADD COLUMN integrity_monitoring INTEGER NOT NULL DEFAULT 0')
   }

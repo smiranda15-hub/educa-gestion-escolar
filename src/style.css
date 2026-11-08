@@ -858,3 +858,78 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .nav-group-chevron-collapsed { transform: rotate(-90deg); }
 .nav-group-items { display: grid; gap: 2px; }
 .nav-group-toggle:focus-visible { outline: 2px solid #8ed4d0; outline-offset: 2px; }
+/* Siempre visibles: navegación agrupada y aula por asignatura */
+.nav-section { margin-bottom: 11px; }
+.nav-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px 7px; margin: 7px 0 3px; }
+.nav-section-heading > span { display: inline-flex; align-items: center; gap: 8px; }
+.nav-section-heading > span svg { color: #87a5ba; }
+.nav-section-heading small { min-width: 20px; padding: 2px 6px; border-radius: 999px; background: #244763; color: #bad0df; text-align: center; font-size: 9px; font-weight: 700; letter-spacing: 0; }
+.nav-group-items { display: grid; gap: 2px; }
+.nav-section .nav-item { min-height: 39px; }
+.portal-assignment-filters { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); max-width: 1100px; }
+.assignment-list { display: grid; gap: 18px; }
+.portal-subject-section { display: grid; gap: 10px; }
+.portal-subject-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 16px; border: 1px solid #dce7ed; border-radius: 13px; background: linear-gradient(110deg, #f4faf9, #fff 65%); }
+.portal-subject-heading > div { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.portal-subject-mark { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 auto; border-radius: 11px; background: #e7f4f1; color: #267f78; }
+.portal-subject-heading h2 { margin: 0; color: #173650; font-size: 15px; font-weight: 750; }
+.portal-subject-heading p { margin: 3px 0 0; color: #71869a; font-size: 11px; }
+.portal-subject-heading > span { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: #edf4f7; color: #44677d; font-size: 10px; font-weight: 700; }
+.portal-subject-section > .assignment-card { margin-left: 14px; }
+.classroom-video { margin: 14px 0; overflow: hidden; border: 1px solid #dce7ed; border-radius: 13px; background: #f7fafb; }
+.classroom-video-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 13px; }
+.classroom-video-heading > span, .classroom-video-heading > a { display: inline-flex; align-items: center; gap: 7px; }
+.classroom-video-heading > span { color: #254c65; font-size: 12px; font-weight: 700; }
+.classroom-video-heading > span svg { color: #2e8b86; }
+.classroom-video-heading > a { color: #286b83; font-size: 11px; text-decoration: none; }
+.classroom-video-heading > a:hover { text-decoration: underline; }
+.classroom-video-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #102536; }
+.classroom-video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+@media(max-width:680px) {
+  .portal-subject-heading { padding: 11px 12px; }
+  .portal-subject-section > .assignment-card { margin-left: 0; }
+  .classroom-video-heading { align-items: flex-start; flex-direction: column; }
+}
+
+/* Evaluations: accessible answer alignment and a roomier authoring flow. */
+.online-exam-dialog { width: min(820px, calc(100vw - 28px)); max-height: min(92dvh, 980px); }
+.online-exam-option { display: grid !important; grid-template-columns: 20px minmax(0, 1fr); align-items: center; justify-content: start; width: 100%; min-height: 46px; text-align: left; }
+.online-exam-option > input[type="radio"] { position: static !important; inset: auto !important; display: block !important; width: 18px !important; min-width: 18px !important; height: 18px !important; margin: 0 !important; float: none !important; justify-self: center; align-self: center; }
+.online-exam-option > span { display: block; width: 100%; min-width: 0; text-align: left; line-height: 1.5; overflow-wrap: anywhere; }
+.online-exam-option:focus-within { outline: 3px solid rgb(40 107 131 / 20%); outline-offset: 1px; }
+.online-exam-timer { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 12px 16px; border: 1px solid #dce7ef; border-radius: 12px; background: #f3f8fa; color: #254c65; }
+.online-exam-timer span { font-size: 13px; font-weight: 650; }
+.online-exam-timer strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.online-exam-timer-warning { border-color: #efc1b8; background: #fff4f1; color: #9b382e; }
+.manual-grade-status { display: block; margin: 5px 0 0 34px; color: #9a6700; font-size: .8rem; }
+.manual-answer-review { margin: 8px 0 4px 34px; max-width: 480px; border: 1px solid #d9e3ed; border-radius: 10px; background: #f8fafc; }
+.manual-answer-review summary { padding: 9px 12px; color: #245b80; font-weight: 650; cursor: pointer; }
+.manual-answer-review ol { display: grid; gap: 10px; margin: 0; padding: 0 14px 13px 34px; }
+.manual-answer-review li { padding-left: 2px; }
+.manual-answer-review li strong, .manual-answer-review li span { display: block; }
+.manual-answer-review li span { margin-top: 3px; color: #536579; font-weight: 400; }
+.assessment-dialog { width: min(900px, calc(100vw - 28px)); max-height: min(92dvh, 1000px); overflow: auto; }
+.assessment-dialog > .dialog-heading { position: sticky; top: -22px; z-index: 3; margin: -22px -22px 0; padding: 20px 22px 14px; border-bottom: 1px solid #e8edf2; background: #fff; }
+.assessment-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding-top: 18px; }
+.assessment-form-grid > label:not(.online-publish-check) { display: grid; align-content: start; gap: 7px; min-width: 0; color: #28465c; font-size: 13px; font-weight: 650; }
+.assessment-form-grid input:not([type="checkbox"]):not([type="file"]), .assessment-form-grid select, .assessment-form-grid textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border: 1px solid #d5e0e9; border-radius: 9px; padding: 10px 12px; background: #fff; color: #18364d; font: inherit; font-weight: 450; }
+.assessment-form-grid textarea { min-height: 100px; resize: vertical; }
+.assessment-form-grid input:focus, .assessment-form-grid select:focus, .assessment-form-grid textarea:focus { outline: 3px solid rgb(40 107 131 / 16%); border-color: #4b9db3; }
+.assessment-form-grid .assessment-wide, .assessment-form-grid .assessment-title-field { grid-column: 1 / -1; }
+.assessment-form-grid .field-hint { display: block; color: #718095; font-size: 11px; font-weight: 450; line-height: 1.45; }
+.assessment-form-grid .online-question-editor { min-width: 0; }
+.assessment-form-grid .online-question-card { background: #fbfcfe; }
+.assessment-form-grid .online-question-card > label { display: grid; grid-column: 1 / -1; gap: 7px; color: #28465c; font-size: 12px; font-weight: 600; }
+.assessment-form-grid .online-question-card textarea { width: 100%; }
+.assessment-form-grid .online-options-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.assessment-form-grid .online-option-editor { min-width: 0; }
+.assessment-form-grid .online-option-editor input[type="radio"] { width: 18px; height: 18px; flex: 0 0 18px; }
+.assessment-form-grid .dialog-actions { position: sticky; bottom: -18px; z-index: 2; margin-top: 4px; padding: 14px 0 2px; background: #fff; border-top: 1px solid #e8edf2; }
+@media(max-width:680px) {
+  .assessment-dialog { width: min(100%, calc(100vw - 18px)); max-height: 94dvh; padding: 16px; }
+  .assessment-dialog > .dialog-heading { top: -16px; margin: -16px -16px 0; padding: 16px 16px 12px; }
+  .assessment-form-grid { grid-template-columns: minmax(0, 1fr); gap: 13px; padding-top: 14px; }
+  .assessment-form-grid .assessment-wide, .assessment-form-grid .assessment-title-field { grid-column: 1; }
+  .assessment-form-grid .online-options-grid { grid-template-columns: minmax(0, 1fr); }
+  .online-exam-dialog { width: min(100%, calc(100vw - 18px)); max-height: 94dvh; }
+}

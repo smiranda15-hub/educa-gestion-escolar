@@ -313,6 +313,16 @@ async function resolveDocumentSigners(schoolId, documentType, courseId = null) {
   if (secondary && secondary.id !== primary?.id) signatures.push(secondary)
   return signatures
 }
+const validYouTubeUrl = value => {
+  if (!value) return true
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return false
+    if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(url.hostname)) return false
+    const id = url.hostname === 'youtu.be' ? url.pathname.split('/').filter(Boolean)[0] : url.searchParams.get('v') || url.pathname.match(/^\/(?:embed|shorts|live)\/([\w-]{11})/)?.[1]
+    return /^[\w-]{11}$/.test(id || '')
+  } catch { return false }
+}
 const validGoogleFormsUrl = value => {
   if (!value) return true
   try {
@@ -2489,7 +2499,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", activity_type AS "activityType", integrity_monitoring AS "integrityMonitoring", is_published AS "isPublished", external_form_url AS "externalFormUrl", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
+    const assessments = await db.all(`SELECT id, title, instructions, due_at AS "dueAt", delivery_mode AS "deliveryMode", activity_type AS "activityType", integrity_monitoring AS "integrityMonitoring", is_published AS "isPublished", external_form_url AS "externalFormUrl", video_url AS "videoUrl", time_limit_minutes AS "timeLimitMinutes", grading_mode AS "gradingMode", weight_percent AS "weightPercent", subject, period, max_score AS "maxScore", created_at AS "createdAt"
       FROM grade_assessments WHERE school_id = ? AND course_id = ? AND subject = ? AND period = ?
       ORDER BY created_at DESC`, user.school_id, course.id, subject, period)
     return json(response, 200, { assessments })
@@ -2508,6 +2518,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const integrityMonitoring = body.integrityMonitoring === true && deliveryMode === 'online' ? 1 : 0
     const isPublished = body.isPublished === true ? 1 : 0
     const externalFormUrl = String(body.externalFormUrl || '').trim()
+    const videoUrl = String(body.videoUrl || '').trim()
+    const timeLimitMinutes = body.timeLimitMinutes === '' || body.timeLimitMinutes == null ? null : Number(body.timeLimitMinutes)
+    const gradingMode = body.gradingMode === 'manual' ? 'manual' : 'auto'
     const questions = Array.isArray(body.questions) ? body.questions : []
     const images = Array.isArray(body.images) ? body.images : []
     const weightPercent = Number(body.weightPercent ?? 100)
@@ -2517,7 +2530,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const assignment = await db.get(`SELECT 1 FROM course_teachers WHERE course_id = ? AND subject = ?
       AND (? <> 'docente' OR user_id = ?)`, course.id, subject, user.role, user.id)
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
-    if (!['file', 'online'].includes(deliveryMode) || !['assignment', 'class_activity'].includes(activityType) || (activityType === 'class_activity' && (deliveryMode !== 'file' || externalFormUrl || questions.length || images.length)) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el tipo de registro, periodo, nombre, instrucciones, enlace, fecha, ponderación y puntaje máximo.' })
+    if (!['file', 'online'].includes(deliveryMode) || !['assignment', 'class_activity'].includes(activityType) || (activityType === 'class_activity' && (deliveryMode !== 'file' || externalFormUrl || questions.length || images.length)) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || videoUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !validYouTubeUrl(videoUrl) || (timeLimitMinutes !== null && (!Number.isInteger(timeLimitMinutes) || timeLimitMinutes < 1 || timeLimitMinutes > 300)) || !['auto', 'manual'].includes(gradingMode) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el tipo de registro, periodo, nombre, instrucciones, enlace, fecha, ponderación, tiempo y puntaje máximo.' })
+    const effectiveTimeLimit = deliveryMode === 'online' ? timeLimitMinutes : null
+    const effectiveGradingMode = deliveryMode === 'online' ? gradingMode : 'auto'
     if (images.length > 5) return json(response, 400, { error: 'Puedes adjuntar hasta 5 imágenes por actividad.' })
     const imageRecords = []
     let imageTotalBytes = 0
@@ -2538,12 +2553,12 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       const prompt = String(question.prompt || '').trim()
       const options = Array.isArray(question.options) ? question.options.map(option => String(option).trim()) : []
       const points = Number(question.points)
-      return prompt.length < 3 || prompt.length > 500 || options.length < 2 || options.length > 5 || options.some(option => option.length < 1 || option.length > 120) || !Number.isInteger(question.correctOption) || question.correctOption < 0 || question.correctOption >= options.length || !Number.isFinite(points) || points <= 0 || points > 1000
+      return prompt.length < 3 || prompt.length > 500 || options.length < 2 || options.length > 5 || options.some(option => option.length < 1 || option.length > 120) || (gradingMode === 'auto' && (!Number.isInteger(question.correctOption) || question.correctOption < 0 || question.correctOption >= options.length)) || !Number.isFinite(points) || points <= 0 || points > 1000
     }) || Math.abs(questions.reduce((total, question) => total + Number(question.points), 0) - maxScore) > 0.001)) return json(response, 400, { error: 'La evaluación en línea requiere 1 a 50 preguntas válidas; el puntaje máximo debe coincidir con la suma de sus preguntas.' })
     if (deliveryMode === 'file' && questions.length) return json(response, 400, { error: 'Los trabajos con archivo no deben incluir preguntas en línea.' })
     const id = randomUUID()
     await db.transaction(async tx => {
-      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, activity_type, integrity_monitoring, is_published, external_form_url, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, activityType, integrityMonitoring, isPublished, externalFormUrl || null, weightPercent, maxScore, user.id)
+      await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, activity_type, integrity_monitoring, is_published, external_form_url, video_url, time_limit_minutes, grading_mode, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, activityType, integrityMonitoring, isPublished, externalFormUrl || null, videoUrl || null, effectiveTimeLimit, effectiveGradingMode, weightPercent, maxScore, user.id)
       for (let index = 0; index < questions.length; index++) {
         const question = questions[index]
         await tx.run('INSERT INTO online_assessment_questions (id, assessment_id, question_no, prompt, options_json, correct_option, points) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), id, index + 1, String(question.prompt).trim(), JSON.stringify(question.options.map(option => String(option).trim())), Number(question.correctOption), Number(question.points))
@@ -2551,13 +2566,13 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       for (const image of imageRecords) await tx.run('INSERT INTO assessment_images (id, school_id, assessment_id, file_name, content_type, file_size, file_data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', image.id, user.school_id, id, image.fileName, image.contentType, image.fileSize, image.fileData, user.id)
     })
     await logAudit(user.school_id, user.id, 'grade_assessment_created')
-    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, activityType, integrityMonitoring: Boolean(integrityMonitoring), isPublished: Boolean(isPublished), externalFormUrl: externalFormUrl || null, images: imageRecords.map(({ id, fileName, contentType }) => ({ id, fileName, contentType })), weightPercent, maxScore } })
+    return json(response, 201, { assessment: { id, courseId, subject, period, title, instructions, dueAt: dueAt || null, deliveryMode, activityType, integrityMonitoring: Boolean(integrityMonitoring), isPublished: Boolean(isPublished), externalFormUrl: externalFormUrl || null, videoUrl: videoUrl || null, timeLimitMinutes: effectiveTimeLimit, gradingMode: effectiveGradingMode, images: imageRecords.map(({ id, fileName, contentType }) => ({ id, fileName, contentType })), weightPercent, maxScore } })
   }
   const gradeAssessmentMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentMatch && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria', 'docente'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar calificaciones.' })
     const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", c.name AS "courseName", c.grade,
-      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.activity_type AS "activityType", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
+      c.academic_year AS "academicYear", a.subject, a.period, a.title, a.instructions, a.due_at AS "dueAt", a.delivery_mode AS "deliveryMode", a.activity_type AS "activityType", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.video_url AS "videoUrl", a.time_limit_minutes AS "timeLimitMinutes", a.grading_mode AS "gradingMode", a.weight_percent AS "weightPercent", a.max_score AS "maxScore"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ?`, gradeAssessmentMatch[1], user.school_id, user.school_id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa evaluación en este colegio.' })
@@ -2574,7 +2589,28 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         OR (st.grade = assessment_course.grade AND NOT EXISTS (SELECT 1 FROM student_enrollments se
           WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa'))
       ) ORDER BY st.full_name`, assessment.courseId, assessment.id, user.school_id)
-    return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore), weightPercent: Number(assessment.weightPercent) }, students: students.map(student => ({ ...student, score: student.score === null ? null : Number(student.score) })) })
+    let attemptsByStudent = new Map()
+    let questions = []
+    if (assessment.deliveryMode === 'online') {
+      const attempts = await db.all(`SELECT student_id AS "studentId", submitted_at AS "submittedAt", answers_json AS "answersJson"
+        FROM online_assessment_attempts WHERE school_id = ? AND assessment_id = ? AND submitted_at IS NOT NULL`, user.school_id, assessment.id)
+      attemptsByStudent = new Map(attempts.map(attempt => [attempt.studentId, attempt]))
+      questions = await db.all(`SELECT id, question_no AS "questionNo", prompt, options_json AS "optionsJson", points
+        FROM online_assessment_questions WHERE assessment_id = ? ORDER BY question_no`, assessment.id)
+    }
+    return json(response, 200, { assessment: { ...assessment, maxScore: Number(assessment.maxScore), weightPercent: Number(assessment.weightPercent) }, students: students.map(student => {
+      const attempt = attemptsByStudent.get(student.id)
+      let answers = {}
+      try { answers = JSON.parse(attempt?.answersJson || '{}') } catch {}
+      return { ...student, score: student.score === null ? null : Number(student.score), onlineSubmittedAt: attempt?.submittedAt || null,
+        onlineAnswers: attempt ? questions.map(question => {
+          let options = []
+          try { options = JSON.parse(question.optionsJson) } catch {}
+          const selectedOption = Number.isInteger(answers[question.id]) ? answers[question.id] : null
+          return { questionNo: Number(question.questionNo), prompt: question.prompt, points: Number(question.points), selectedOption,
+            selectedAnswer: selectedOption === null ? null : options[selectedOption] ?? null }
+        }) : [] }
+    }) })
   }
   const gradeAssessmentDeleteMatch = url.pathname.match(/^\/api\/grades\/assessments\/([0-9a-f-]{36})$/i)
   if (gradeAssessmentDeleteMatch && method === 'DELETE') {
@@ -2879,7 +2915,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const student = await db.get('SELECT id, grade FROM students WHERE id = ? AND school_id = ?', studentId, user.school_id)
     if (!student || !await db.get('SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ?', user.id, studentId)) return json(response, 403, { error: 'Ese estudiante no está vinculado a tu cuenta.' })
     const assignments = await db.all(`SELECT a.id, a.title, a.instructions, a.due_at AS "dueAt", a.subject, a.period,
-        a.delivery_mode AS "deliveryMode", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl",
+        a.delivery_mode AS "deliveryMode", a.integrity_monitoring AS "integrityMonitoring", a.is_published AS "isPublished", a.external_form_url AS "externalFormUrl", a.video_url AS "videoUrl",
+        a.time_limit_minutes AS "timeLimitMinutes", a.grading_mode AS "gradingMode",
         a.max_score AS "maxScore", c.name AS "courseName", c.academic_year AS "academicYear",
         sg.score, sg.comment, latest.id AS "submissionId", latest.original_file_name AS "fileName",
         latest.uploaded_at AS "uploadedAt", latest.submission_no AS "submissionNo",
@@ -2945,7 +2982,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const studentId = String(body.studentId || '')
     const student = await db.get("SELECT id, grade FROM students WHERE id = ? AND school_id = ? AND status = 'Activo'", studentId, user.school_id)
     if (!student || !await db.get("SELECT 1 FROM user_students WHERE user_id = ? AND student_id = ? AND relationship = 'estudiante'", user.id, studentId)) return json(response, 403, { error: 'La evaluación solo está disponible para el estudiante vinculado a esta cuenta.' })
-    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.title, a.due_at AS "dueAt", a.max_score AS "maxScore", a.integrity_monitoring AS "integrityMonitoring", c.grade
+    const assessment = await db.get(`SELECT a.id, a.course_id AS "courseId", a.subject, a.title, a.due_at AS "dueAt", a.max_score AS "maxScore", a.integrity_monitoring AS "integrityMonitoring", a.time_limit_minutes AS "timeLimitMinutes", a.grading_mode AS "gradingMode", c.grade
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
       WHERE a.id = ? AND a.school_id = ? AND c.school_id = ? AND c.is_active = 1 AND a.delivery_mode = 'online' AND a.is_published = 1
         AND ((EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ?
@@ -2967,21 +3004,46 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     }
     const questions = await db.all('SELECT id, question_no AS "questionNo", prompt, options_json AS "optionsJson", correct_option AS "correctOption", points FROM online_assessment_questions WHERE assessment_id = ? ORDER BY question_no', assessment.id)
     if (!questions.length) return json(response, 409, { error: 'La evaluación todavía no tiene preguntas disponibles.' })
-    let attempt = await db.get('SELECT id, submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
+    let attempt = await db.get('SELECT id, started_at AS "startedAt", submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
+    const timeLimitMinutes = Number(assessment.timeLimitMinutes) || 0
+    const remainingSeconds = target => timeLimitMinutes ? Math.max(0, Math.ceil((Date.parse(target.startedAt) + timeLimitMinutes * 60_000 - Date.now()) / 1000)) : null
+    const gradeAnswers = answers => {
+      let result = 0
+      for (const question of questions) if (answers?.[question.id] === Number(question.correctOption)) result += Number(question.points)
+      return Number(result.toFixed(2))
+    }
+    const finalizeExpiredAttempt = async (target, latestAnswers = null) => {
+      if (!timeLimitMinutes || !target || target.submittedAt || remainingSeconds(target) > 0) return null
+      const savedAnswers = latestAnswers && typeof latestAnswers === 'object' && !Array.isArray(latestAnswers) ? latestAnswers : JSON.parse(target.answersJson || '{}')
+      const autoScore = assessment.gradingMode === 'manual' ? null : gradeAnswers(savedAnswers)
+      const submittedAt = new Date().toISOString()
+      await db.transaction(async tx => {
+        const updated = await tx.run('UPDATE online_assessment_attempts SET answers_json = ?, score = ?, submitted_at = ? WHERE id = ? AND submitted_at IS NULL', JSON.stringify(savedAnswers), autoScore, submittedAt, target.id)
+        if (!(updated.changes ?? updated.rowCount)) return
+        if (autoScore !== null) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score,
+          comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+          assessment.id, student.id, autoScore, 'Evaluación en línea completada al vencer el tiempo', user.id, submittedAt)
+      })
+      return { status: 'submitted', score: autoScore, maxScore: Number(assessment.maxScore), gradingMode: assessment.gradingMode, timedOut: true }
+    }
     if (onlineAssessmentAction[2] === 'start') {
       if (!attempt) {
         const attemptId = randomUUID()
         try {
           await db.run('INSERT INTO online_assessment_attempts (id, school_id, assessment_id, student_id) VALUES (?, ?, ?, ?)', attemptId, user.school_id, assessment.id, student.id)
-          attempt = { id: attemptId, submittedAt: null, score: null }
+          attempt = await db.get('SELECT id, started_at AS "startedAt", submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE id = ?', attemptId)
           await logAudit(user.school_id, user.id, 'online_assessment_started')
         } catch (error) {
           if (!String(error.code).startsWith('23') && !String(error.message).includes('UNIQUE')) throw error
-          attempt = await db.get('SELECT id, submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
+          attempt = await db.get('SELECT id, started_at AS "startedAt", submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
         }
       }
-      if (attempt.submittedAt) return json(response, 200, { status: 'submitted', score: Number(attempt.score), maxScore: Number(assessment.maxScore) })
+      if (attempt.submittedAt) return json(response, 200, { status: 'submitted', score: attempt.score === null ? null : Number(attempt.score), maxScore: Number(assessment.maxScore), gradingMode: assessment.gradingMode })
+      const expired = await finalizeExpiredAttempt(attempt)
+      if (expired) return json(response, 200, expired)
       return json(response, 200, { status: 'started', attemptId: attempt.id, title: assessment.title, subject: assessment.subject, monitoringEnabled: Boolean(assessment.integrityMonitoring),
+        timeLimitMinutes: timeLimitMinutes || null, timeRemainingSeconds: remainingSeconds(attempt), gradingMode: assessment.gradingMode,
         answers: JSON.parse(attempt.answersJson || '{}'),
         maxScore: Number(assessment.maxScore), questions: questions.map(question => ({ id: question.id, questionNo: question.questionNo,
           prompt: question.prompt, options: JSON.parse(question.optionsJson), points: Number(question.points) })) })
@@ -2994,32 +3056,34 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         const options = question && JSON.parse(question.optionsJson)
         return !question || !Number.isInteger(answers[id]) || answers[id] < 0 || answers[id] >= options.length
       })) return json(response, 400, { error: 'Una o más respuestas no son válidas.' })
-      const attempt = await db.get('SELECT id, submitted_at AS "submittedAt" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
+      const attempt = await db.get('SELECT id, started_at AS "startedAt", submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
       if (!attempt || attempt.submittedAt) return json(response, 409, { error: 'No hay un intento abierto para guardar respuestas.' })
+      const expired = await finalizeExpiredAttempt(attempt, answers)
+      if (expired) return json(response, 200, expired)
       await db.run('UPDATE online_assessment_attempts SET answers_json = ? WHERE id = ? AND submitted_at IS NULL', JSON.stringify(answers), attempt.id)
       return json(response, 200, { saved: true })
     }
     if (!attempt || attempt.submittedAt) return json(response, 409, { error: 'Esta evaluación no tiene un intento pendiente de envío.' })
+    const expired = await finalizeExpiredAttempt(attempt)
+    if (expired) return json(response, 200, expired)
     const answers = body.answers
     if (!answers || typeof answers !== 'object' || Array.isArray(answers) || Object.keys(answers).length !== questions.length || questions.some(question => {
       const selected = answers[question.id]
       const options = JSON.parse(question.optionsJson)
       return !Number.isInteger(selected) || selected < 0 || selected >= options.length
     })) return json(response, 400, { error: 'Responde todas las preguntas antes de enviar.' })
-    let score = 0
-    for (const question of questions) if (answers[question.id] === Number(question.correctOption)) score += Number(question.points)
-    score = Number(score.toFixed(2))
+    const score = assessment.gradingMode === 'manual' ? null : gradeAnswers(answers)
     const submittedAt = new Date().toISOString()
     await db.transaction(async tx => {
       const updated = await tx.run('UPDATE online_assessment_attempts SET answers_json = ?, score = ?, submitted_at = ? WHERE id = ? AND submitted_at IS NULL', JSON.stringify(answers), score, submittedAt, attempt.id)
       if (!(updated.changes ?? updated.rowCount)) throw Object.assign(new Error('El intento ya fue enviado desde otra sesión.'), { status: 409 })
-      await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
+      if (score !== null) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score,
         comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
         assessment.id, student.id, score, 'Evaluación en línea completada', user.id, submittedAt)
     })
     await logAudit(user.school_id, user.id, 'online_assessment_submitted')
-    return json(response, 200, { status: 'submitted', score, maxScore: Number(assessment.maxScore) })
+    return json(response, 200, { status: 'submitted', score, maxScore: Number(assessment.maxScore), gradingMode: assessment.gradingMode })
   }
   const studentSubmissionMatch = url.pathname.match(/^\/api\/portal\/assignments\/([0-9a-f-]{36})\/submissions$/i)
   if (studentSubmissionMatch && method === 'POST') {
