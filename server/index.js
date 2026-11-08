@@ -340,6 +340,23 @@ async function route(request, response) {
   if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
+  const staffCardVerificationMatch = url.pathname.match(/^\/api\/public\/staff-card\/([0-9a-f-]{36})$/i)
+  if (method === 'GET' && staffCardVerificationMatch) {
+    const record = await db.get(`SELECT p.id, p.full_name AS "staffName", p.position_title AS "positionTitle", p.is_active AS "isActive",
+      s.name AS "schoolName", s.slug AS "schoolSlug", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+      FROM institutional_staff p JOIN schools s ON s.id = p.school_id WHERE p.id = ?`, staffCardVerificationMatch[1])
+    if (!record) return json(response, 404, { valid: false, status: 'Carné no encontrado.' })
+    const valid = Boolean(record.isActive)
+    return json(response, 200, { valid, status: valid ? 'Carné institucional vigente' : 'Carné institucional inactivo', documentKind: 'Carné de personal', staffName: record.staffName, positionTitle: record.positionTitle, hasLogo: Boolean(record.hasLogo), schoolName: record.schoolName, schoolSlug: record.schoolSlug })
+  }
+  const studentCardVerificationMatch = url.pathname.match(/^\/api\/public\/student-card\/([0-9a-f-]{36})$/i)
+  if (method === 'GET' && studentCardVerificationMatch) {
+    const record = await db.get(`SELECT st.full_name AS "studentName", st.grade, st.status, s.name AS "schoolName", s.slug AS "schoolSlug", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+      FROM students st JOIN schools s ON s.id = st.school_id WHERE st.card_code = ?`, studentCardVerificationMatch[1])
+    if (!record) return json(response, 404, { valid: false, status: 'Carné no encontrado.' })
+    const valid = record.status === 'Activo'
+    return json(response, 200, { valid, status: valid ? 'Carné estudiantil vigente' : 'Carné estudiantil inactivo', documentKind: 'Carné estudiantil', studentName: record.studentName, grade: record.grade, hasLogo: Boolean(record.hasLogo), schoolName: record.schoolName, schoolSlug: record.schoolSlug })
+  }
   const publicVerificationMatch = url.pathname.match(/^\/api\/public\/verification\/(constancia|boletin)\/([0-9a-f-]{36})$/i)
   if (method === 'GET' && publicVerificationMatch) {
     const [, kind, token] = publicVerificationMatch
@@ -817,7 +834,7 @@ async function route(request, response) {
     if (year && !academicYearStart(year)) return json(response, 400, { error: 'Escribe el año lectivo con cuatro dígitos, por ejemplo 2026.' })
     const search = `%${String(url.searchParams.get('search') || '').trim().slice(0, 100)}%`
     const clauses = ['d.school_id = ?'], params = [user.school_id]
-    if (['CERT', 'BOL', 'MAT', 'SOLMAT'].includes(type)) { clauses.push('d.document_type = ?'); params.push(type) }
+    if (['CERT', 'BOL', 'MAT', 'SOLMAT', 'PERS'].includes(type)) { clauses.push('d.document_type = ?'); params.push(type) }
     if (year && academicYearStart(year)) { clauses.push("LEFT(d.academic_year, 4) = ?"); params.push(academicYearStart(year)) }
     if (search !== '%%') { clauses.push('(d.document_number LIKE ? OR d.student_name LIKE ? OR d.status LIKE ?)'); params.push(search, search, search) }
     const where = clauses.join(' AND ')
@@ -1688,14 +1705,21 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { students })
   }
   if (url.pathname === '/api/portal/digital-card' && method === 'GET') {
-    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'El carné digital está disponible para cuentas de estudiante y acudiente.' })
+    if (['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria'].includes(user.role)) {
+      const staff = await db.all(`SELECT p.id, p.full_name AS "fullName", p.position_title AS "positionTitle", p.department, p.is_active AS "isActive", s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+        FROM institutional_staff p JOIN schools s ON s.id = p.school_id WHERE p.user_id = ? AND p.school_id = ? AND p.is_active = 1`, user.id, user.school_id)
+      const issuer = await db.get(`SELECT id, full_name AS "fullName", position_title AS "positionTitle", signature_data AS "signatureData", signature_content_type AS "signatureContentType" FROM institutional_staff WHERE school_id = ? AND is_active = 1 AND signature_data IS NOT NULL ORDER BY CASE WHEN user_id = ? THEN 0 WHEN position_key = 'rector' THEN 1 ELSE 2 END, created_at LIMIT 1`, user.school_id, user.id)
+      const issuerSignature = issuer?.signatureData && issuer.signatureContentType === 'image/png' ? `data:image/png;base64,${Buffer.from(issuer.signatureData).toString('base64')}` : ''
+      return json(response, 200, { cards: [], staffCards: staff.map(person => ({ ...person, isActive: Boolean(person.isActive), cardCode: `EDU-P-${person.id.replaceAll('-', '').slice(0, 12).toUpperCase()}`, issuerName: issuer?.fullName || '', issuerTitle: issuer?.positionTitle || '', issuerSignature })) })
+    }
+    if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'No hay un carné digital disponible para esta cuenta.' })
     const students = await db.all(`SELECT st.id, st.card_code AS "cardCode", (st.photo_data IS NOT NULL) AS "hasPhoto", st.full_name AS "studentName", st.grade, st.status, us.relationship,
       s.name AS "schoolName", s.primary_color AS "primaryColor", s.logo_content_type AS "logoContentType",
       COALESCE(en.academic_year, '') AS "academicYear"
       FROM user_students us JOIN students st ON st.id = us.student_id JOIN schools s ON s.id = st.school_id
       LEFT JOIN student_enrollments en ON en.id = (SELECT e.id FROM student_enrollments e WHERE e.student_id = st.id AND e.school_id = st.school_id AND e.status = 'Activa' ORDER BY e.start_date DESC LIMIT 1)
       WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
-    return json(response, 200, { cards: students.map(student => ({ ...student, hasLogo: Boolean(student.logoContentType) })) })
+    return json(response, 200, { cards: students.map(student => ({ ...student, hasLogo: Boolean(student.logoContentType) })), staffCards: [] })
   }
   const cardPhotoMatch = url.pathname.match(/^\/api\/portal\/digital-card\/([0-9a-f-]{36})\/photo$/i)
   if (cardPhotoMatch && method === 'GET') {
@@ -1957,7 +1981,32 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const accounts = await db.all(`SELECT id, full_name AS "fullName", email, role, contact_phone AS phone FROM users
       WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria','docente','orientacion','tesoreria')
         AND is_active = 1 AND deleted_at IS NULL ORDER BY full_name`, user.school_id)
-    return json(response, 200, { staff: staff.map(item => ({ ...item, isActive: Boolean(item.isActive), hasSignature: Boolean(item.hasSignature) })), courses: courses.map(item => ({ ...item, isActive: Boolean(item.isActive) })), directors, rules, accounts })
+    const school = await db.get('SELECT name, slug, primary_color AS "primaryColor", (logo_content_type IS NOT NULL) AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
+    return json(response, 200, { staff: staff.map(item => ({ ...item, isActive: Boolean(item.isActive), hasSignature: Boolean(item.hasSignature) })), courses: courses.map(item => ({ ...item, isActive: Boolean(item.isActive) })), directors, rules, accounts, school, issuerUserId: user.id, issuerName: user.full_name, issuerRole: user.role })
+  }
+  if (url.pathname === '/api/institutional-staff/certifications' && method === 'GET') {
+    const records = await db.all(`SELECT c.id, c.document_number AS "documentNumber", c.certificate_type AS "certificateType", c.academic_year AS "academicYear", c.issuer_name AS "issuerName", c.issuer_title AS "issuerTitle", c.signature_snapshot AS "signatureSnapshot", c.status, c.created_at AS "createdAt", p.id AS "staffId", p.full_name AS "staffName", p.national_id AS "nationalId", p.position_title AS "positionTitle", p.department
+      FROM staff_certifications c JOIN institutional_staff p ON p.id = c.staff_id WHERE c.school_id = ? ORDER BY c.created_at DESC LIMIT 200`, user.school_id)
+    return json(response, 200, { records: records.map(record => { let signature = null; try { signature = record.signatureSnapshot ? JSON.parse(record.signatureSnapshot) : null } catch {} return { ...record, issuerSignature: signature?.dataUrl || '' } }) })
+  }
+  if (url.pathname === '/api/institutional-staff/certifications' && method === 'POST') {
+    const body = await readBody(request), staffId = String(body.staffId || ''), certificateType = String(body.certificateType || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(staffId) || !['Constancia laboral', 'Certificación de cargo'].includes(certificateType)) return json(response, 400, { error: 'Selecciona un funcionario y un tipo de constancia válido.' })
+    const person = await db.get(`SELECT id, full_name AS "fullName", position_title AS "positionTitle", national_id AS "nationalId", department FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1`, staffId, user.school_id)
+    if (!person) return json(response, 404, { error: 'El funcionario seleccionado no está activo en esta institución.' })
+    const issuer = await db.get(`SELECT id, full_name AS "fullName", position_title AS "positionTitle", signature_data AS "signatureData", signature_content_type AS "signatureContentType"
+      FROM institutional_staff WHERE user_id = ? AND school_id = ? AND is_active = 1`, user.id, user.school_id)
+    if (!issuer?.signatureData || issuer.signatureContentType !== 'image/png') return json(response, 409, { error: 'Para emitir una constancia, vincula tu cuenta en Personal Institucional y Firmas y carga tu firma PNG.' })
+    const schoolYear = String(new Date().getFullYear()), id = randomUUID(), documentNumber = await nextDocumentNumber(db, user.school_id, 'PERS', schoolYear)
+    const issuerName = issuer.fullName, issuerTitle = issuer.positionTitle, signatureBuffer = Buffer.from(issuer.signatureData)
+    const signatureSnapshot = JSON.stringify({ dataUrl: `data:image/png;base64,${signatureBuffer.toString('base64')}`, signerId: issuer.id, signerName: issuerName, signerTitle: issuerTitle, signedAt: new Date().toISOString() })
+    await db.transaction(async tx => {
+      await tx.run(`INSERT INTO staff_certifications (id, school_id, staff_id, document_number, certificate_type, academic_year, issuer_user_id, issuer_name, issuer_title, signature_snapshot, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Emitida')`, id, user.school_id, person.id, documentNumber, certificateType, schoolYear, user.id, issuerName, issuerTitle, signatureSnapshot)
+      await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'PERS', documentNumber, referenceId: id, studentName: person.fullName, academicYear: schoolYear, status: 'Emitida', createdBy: user.id })
+    })
+    await logAudit(user.school_id, user.id, 'staff_certification_issued')
+    return json(response, 201, { id, documentNumber, certificateType, academicYear: schoolYear, createdAt: new Date().toISOString(), staffId: person.id, staffName: person.fullName, nationalId: person.nationalId, positionTitle: person.positionTitle, department: person.department, issuerName, issuerTitle, issuerSignature: `data:image/png;base64,${signatureBuffer.toString('base64')}`, status: 'Emitida' })
   }
   const institutionalStaffMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})$/i)
   if ((url.pathname === '/api/institutional-staff' && method === 'POST') || (institutionalStaffMatch && method === 'PUT')) {

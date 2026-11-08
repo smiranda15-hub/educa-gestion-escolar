@@ -290,6 +290,22 @@ export async function migrate() {
       updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       PRIMARY KEY (school_id, document_type)
     );
+    CREATE TABLE IF NOT EXISTS staff_certifications (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      staff_id TEXT NOT NULL REFERENCES institutional_staff(id) ON DELETE RESTRICT,
+      document_number TEXT NOT NULL,
+      certificate_type TEXT NOT NULL,
+      academic_year TEXT NOT NULL,
+      issuer_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      issuer_name TEXT NOT NULL,
+      issuer_title TEXT NOT NULL,
+      signature_snapshot TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Emitida',
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (school_id, document_number)
+    );
+    CREATE INDEX IF NOT EXISTS staff_certifications_scope_idx ON staff_certifications(school_id, created_at);
     CREATE TABLE IF NOT EXISTS attendance_records (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id),
