@@ -323,7 +323,7 @@ function Code39Barcode({ value }) {
   const bars = []
   for (const char of encoded) {
     const pattern = code39Patterns[char] || code39Patterns['-']
-    pattern.forEach((width, index) => { const barWidth = width === 'w' ? 3 : 1.6; if (index % 2 === 0) bars.push(<rect key={`${char}-${x}`} x={x} y="2" width={barWidth} height="38"/>); x += barWidth + 1.6 })
+    Array.from(pattern).forEach((width, index) => { const barWidth = width === 'w' ? 3 : 1.6; if (index % 2 === 0) bars.push(<rect key={`${char}-${x}`} x={x} y="2" width={barWidth} height="38"/>); x += barWidth + 1.6 })
     x += 2
   }
   return <svg className="staff-barcode-svg" role="img" aria-label={`Código de barras ${value}`} viewBox={`0 0 ${x + 8} 44`} preserveAspectRatio="none">{bars}</svg>
