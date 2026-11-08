@@ -15,9 +15,41 @@ import './edu-design.css'
 import { LEGAL_TERMS_VERSION, LegalDocumentPage, TermsAcceptanceDialog } from './legal.jsx'
 
 const navGroups = [
-  { title: 'GENERAL', items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Mi perfil', icon: UserRound }, { label: 'Mensajería', icon: Mail }, { label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Justificaciones', icon: Check }, { label: 'Calendario', icon: CalendarDays }, { label: 'Actividades y eventos', icon: PartyPopper }, { label: 'Carné digital', icon: IdCard }, { label: 'Certificados y constancias', icon: Award }, { label: 'Trayectoria académica', icon: History }, { label: 'Horario', icon: Clock3 }, { label: 'Calificaciones', icon: BookOpen }, { label: 'Boletines', icon: FileText }, { label: 'Mi aula', icon: ClipboardCheck }] },
-  { title: 'GESTIÓN', items: [{ label: 'Personal Institucional y Firmas', icon: PenTool }, { label: 'Usuarios y accesos', icon: LockKeyhole }, { label: 'Solicitudes de contraseña', icon: LockKeyhole }, { label: 'Cursos y docentes', icon: GraduationCap }, { label: 'Pagos estudiantiles', icon: CreditCard }, { label: 'Mis cursos', icon: BookOpen }, { label: 'Comunicaciones', icon: Bell }, { label: 'Notificaciones', icon: Bell }, { label: 'Observador del estudiante', icon: ShieldCheck }, { label: 'Periodos académicos', icon: CalendarDays }, { label: 'Importar estudiantes', icon: Download }, { label: 'Respaldos', icon: Download }, { label: 'Reportes', icon: FileText }, { label: 'Bitácora', icon: History }, { label: 'Control documental', icon: FileText }] },
+  { title: 'Inicio', icon: LayoutDashboard, items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Mi perfil', icon: UserRound }, { label: 'Mensajería', icon: Mail }, { label: 'Notificaciones', icon: Bell }] },
+  { title: 'Vida escolar', icon: CalendarDays, items: [{ label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Justificaciones', icon: Check }, { label: 'Calendario', icon: CalendarDays }, { label: 'Actividades y eventos', icon: PartyPopper }, { label: 'Horario', icon: Clock3 }] },
+  { title: 'Académico', icon: GraduationCap, items: [{ label: 'Mis cursos', icon: BookOpen }, { label: 'Cursos y docentes', icon: GraduationCap }, { label: 'Calificaciones', icon: BookOpen }, { label: 'Boletines', icon: FileText }, { label: 'Mi aula', icon: ClipboardCheck }, { label: 'Observador del estudiante', icon: ShieldCheck }, { label: 'Trayectoria académica', icon: History }] },
+  { title: 'Comunidad', icon: Users, items: [{ label: 'Comunicaciones', icon: Bell }] },
+  { title: 'Documentos', icon: FileText, items: [{ label: 'Carné digital', icon: IdCard }, { label: 'Certificados y constancias', icon: Award }, { label: 'Control documental', icon: FileText }] },
+  { title: 'Administración', icon: Settings2, items: [{ label: 'Personal Institucional y Firmas', icon: PenTool }, { label: 'Usuarios y accesos', icon: LockKeyhole }, { label: 'Solicitudes de contraseña', icon: LockKeyhole }, { label: 'Pagos estudiantiles', icon: CreditCard }, { label: 'Periodos académicos', icon: CalendarDays }, { label: 'Importar estudiantes', icon: Download }, { label: 'Respaldos', icon: Download }, { label: 'Reportes', icon: FileText }, { label: 'Bitácora', icon: History }] },
 ]
+
+const navRoleAccess = {
+  'Personal Institucional y Firmas': ['admin', 'rectoria'],
+  'Trayectoria académica': ['acudiente', 'estudiante'],
+  'Matrículas': ['admin', 'rectoria', 'secretaria'],
+  'Usuarios y accesos': ['admin'],
+  'Solicitudes de contraseña': ['admin', 'rectoria', 'coordinacion', 'secretaria'],
+  'Cursos y docentes': ['admin', 'rectoria', 'secretaria'],
+  'Mis cursos': ['docente'],
+  'Estudiantes': ['admin', 'secretaria', 'rectoria', 'docente'],
+  'Asistencia': ['admin', 'rectoria', 'secretaria', 'docente'],
+  'Calificaciones': ['admin', 'rectoria', 'secretaria', 'docente'],
+  'Reportes': ['admin', 'rectoria', 'secretaria', 'docente'],
+  'Bitácora': ['admin', 'rectoria'],
+  'Control documental': ['admin', 'rectoria', 'secretaria'],
+  'Boletines': ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente'],
+  'Mi aula': ['acudiente', 'estudiante'],
+  'Justificaciones': ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'acudiente', 'estudiante'],
+  'Observador del estudiante': ['admin', 'rectoria', 'coordinacion', 'orientacion', 'docente'],
+  'Periodos académicos': ['admin', 'rectoria', 'secretaria'],
+  'Importar estudiantes': ['admin', 'rectoria', 'secretaria'],
+  'Respaldos': ['admin'],
+  'Pagos estudiantiles': ['admin', 'rectoria', 'tesoreria'],
+  'Carné digital': ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria', 'acudiente', 'estudiante'],
+  'Certificados y constancias': ['admin', 'rectoria', 'coordinacion', 'secretaria', 'acudiente'],
+  'Actividades y eventos': ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'acudiente', 'estudiante'],
+}
+const canSeeNavItem = (item, role) => !navRoleAccess[item.label] || navRoleAccess[item.label].includes(role)
 
 const roles = [
   { value: 'rectoria', label: 'Rectoría' }, { value: 'coordinacion', label: 'Coordinación' },
@@ -1014,6 +1046,7 @@ function App() {
   const [active, setActive] = useState('Resumen')
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [expandedNavGroups, setExpandedNavGroups] = useState({ Inicio: true, 'Vida escolar': true })
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [query, setQuery] = useState('')
   const searchInputRef = useRef(null)
@@ -2235,7 +2268,18 @@ function App() {
       <button className="school-switch" title={user?.role === 'admin' ? 'Abrir configuración del colegio' : 'Institución actual'} onClick={() => user?.role === 'admin' ? (setActive('Configuración'), setSchoolSettingsError('')) : notify('La configuración del colegio está disponible para administración.')}><div className="school-avatar">{user?.school?.hasLogo ? <img src="/api/school/logo" alt="Logo del colegio"/> : user?.school?.name?.slice(0, 1).toLocaleUpperCase('es') || selectedSchool?.initials || 'C'}</div><div className="school-copy"><strong>{user?.school?.name || selectedSchool?.name || 'Colegio Altamira'}</strong><span>{user?.role === 'admin' ? 'Sede principal · Configuración' : 'Sede principal'}</span></div><ChevronDown size={16} className="muted-icon" /></button>
       <label className="sidebar-search"><Search size={15}/><input aria-label="Buscar módulo" placeholder="Buscar módulo" value={sidebarSearch} onChange={event => setSidebarSearch(event.target.value)}/>{sidebarSearch && <button type="button" aria-label="Limpiar búsqueda" onClick={() => setSidebarSearch('')}><X size={13}/></button>}</label>
       <div className="side-scroll">
-        {navGroups.map(group => <section className="nav-section" key={group.title}><div className="nav-heading">{group.title}</div>{group.items.filter(item => (item.label !== 'Personal Institucional y Firmas' || ['admin','rectoria'].includes(user?.role)) && (item.label !== 'Trayectoria académica' || ['acudiente','estudiante'].includes(user?.role)) && (item.label !== 'Matrículas' || ['admin', 'rectoria', 'secretaria'].includes(user?.role)) && (item.label !== 'Usuarios y accesos' || user?.role === 'admin') && (item.label !== 'Solicitudes de contraseña' || ['admin','rectoria','coordinacion','secretaria'].includes(user?.role)) && (item.label !== 'Cursos y docentes' || ['admin', 'rectoria', 'secretaria'].includes(user?.role)) && (item.label !== 'Mis cursos' || user?.role === 'docente') && (item.label !== 'Estudiantes' || ['admin', 'secretaria', 'rectoria', 'docente'].includes(user?.role)) && (item.label !== 'Asistencia' || ['admin', 'rectoria', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Calificaciones' || ['admin', 'rectoria', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Reportes' || ['admin', 'rectoria', 'secretaria', 'docente'].includes(user?.role)) && (item.label !== 'Bitácora' || ['admin','rectoria'].includes(user?.role)) && (item.label !== 'Control documental' || ['admin','rectoria','secretaria'].includes(user?.role)) && (item.label !== 'Boletines' || ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente'].includes(user?.role)) && (item.label !== 'Mi aula' || ['acudiente', 'estudiante'].includes(user?.role)) && (item.label !== 'Justificaciones' || ['admin','rectoria','coordinacion','secretaria','docente','orientacion','acudiente','estudiante'].includes(user?.role)) && (item.label !== 'Observador del estudiante' || ['admin','rectoria','coordinacion','orientacion','docente'].includes(user?.role)) && (item.label !== 'Periodos académicos' || ['admin','rectoria','secretaria'].includes(user?.role)) && (item.label !== 'Importar estudiantes' || ['admin','rectoria','secretaria'].includes(user?.role)) && (item.label !== 'Respaldos' || user?.role === 'admin') && (item.label !== 'Pagos estudiantiles' || ['admin', 'rectoria', 'tesoreria'].includes(user?.role)) && (item.label !== 'Carné digital' || ['admin','rectoria','coordinacion','secretaria','docente','orientacion','tesoreria','acudiente','estudiante'].includes(user?.role)) && (item.label !== 'Certificados y constancias' || ['admin','rectoria','coordinacion','secretaria','acudiente'].includes(user?.role)) && (item.label !== 'Actividades y eventos' || ['admin','rectoria','coordinacion','secretaria','docente','acudiente','estudiante'].includes(user?.role)) && (!sidebarSearch.trim() || item.label.toLocaleLowerCase('es').includes(sidebarSearch.trim().toLocaleLowerCase('es')))).map(item => <button key={item.label} className={`nav-item ${active === item.label ? 'selected' : ''}`} aria-current={active === item.label ? 'page' : undefined} onClick={() => { setActive(item.label); setMenuOpen(false) }}><item.icon size={18} strokeWidth={1.9} /><span>{item.label}</span>{item.badge && <span className="nav-badge">{item.badge}</span>}</button>)}</section>)}
+        {navGroups.map(group => {
+          const items = group.items.filter(item => canSeeNavItem(item, user?.role) && (!sidebarSearch.trim() || item.label.toLocaleLowerCase('es').includes(sidebarSearch.trim().toLocaleLowerCase('es'))))
+          if (!items.length) return null
+          const expanded = Boolean(sidebarSearch.trim()) || Boolean(expandedNavGroups[group.title])
+          return <section className="nav-section" key={group.title}>
+            <button type="button" className="nav-group-toggle" aria-expanded={expanded} onClick={() => setExpandedNavGroups(current => ({ ...current, [group.title]: !current[group.title] }))}>
+              <span className="nav-group-label"><group.icon size={15} strokeWidth={1.9}/>{group.title}</span>
+              <span className="nav-group-meta"><span>{items.length}</span><ChevronDown size={14} className={`nav-group-chevron ${expanded ? '' : 'nav-group-chevron-collapsed'}`}/></span>
+            </button>
+            {expanded && <div className="nav-group-items">{items.map(item => <button key={item.label} className={`nav-item ${active === item.label ? 'selected' : ''}`} aria-current={active === item.label ? 'page' : undefined} onClick={() => { setActive(item.label); setExpandedNavGroups(current => ({ ...current, [group.title]: true })); setMenuOpen(false) }}><item.icon size={18} strokeWidth={1.9} /><span>{item.label}</span>{item.badge && <span className="nav-badge">{item.badge}</span>}</button>)}</div>}
+          </section>
+        })}
         <div className="sidebar-note"><span className="note-icon"><Sparkles size={16} /></span><div><strong>Todo en orden</strong><p>Tu institución está al día.</p></div><ArrowRight size={15} className="note-arrow" /></div>
       </div>
       <div className="sidebar-bottom">{user?.role === 'admin' && <button className="nav-item" onClick={() => { setActive('Configuración'); setSchoolSettingsError('') }}><Settings2 size={18} /><span>Configuración</span></button>}{user?.role === 'admin' && user?.email?.toLowerCase() === institutionManagerEmail && <button className={`nav-item ${active === 'Instituciones' ? 'selected' : ''}`} onClick={() => setActive('Instituciones')}><Building2 size={18}/><span>Instituciones</span></button>}<div className="user-card"><ProfileAvatar user={user} revision={profileRevision}/><div className="user-copy"><strong>{user?.name || 'Usuario'}</strong><span>{user?.role === 'admin' ? 'Administrador' : user?.role || 'Personal'}</span></div><button className="icon-btn" title="Cambiar contraseña" aria-label="Cambiar contraseña" onClick={() => { setPasswordError(''); setPasswordDialog(true) }}><LockKeyhole size={16}/></button></div><button type="button" className="logout-button" title="Cerrar sesión" aria-label="Cerrar sesión" onClick={logout}><LogOut size={17}/><span>Cerrar sesión</span></button></div>
