@@ -9,7 +9,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.js",
-    "perf:load": "k6 run perf/educa-load.js",
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "android:apk": "npm run android:sync && cd android && gradlew.bat assembleDebug"
