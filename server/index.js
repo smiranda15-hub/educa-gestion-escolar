@@ -2072,6 +2072,19 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     await logAudit(user.school_id, user.id, body.active ? 'institutional_staff_activated' : 'institutional_staff_deactivated')
     return json(response, 200, { active: body.active })
   }
+  if (institutionalStaffMatch && method === 'DELETE') {
+    const staffId = institutionalStaffMatch[1]
+    const staff = await db.get('SELECT id, full_name AS "fullName" FROM institutional_staff WHERE id = ? AND school_id = ?', staffId, user.school_id)
+    if (!staff) return json(response, 404, { error: 'No encontramos ese perfil en esta institución.' })
+    const issued = Number((await db.get('SELECT COUNT(*) AS count FROM staff_certifications WHERE staff_id = ? AND school_id = ?', staffId, user.school_id)).count)
+    if (issued) return json(response, 409, { error: 'Este perfil tiene constancias oficiales emitidas. Desactívalo para conservar su historial documental.' })
+    await db.transaction(async tx => {
+      await tx.run('DELETE FROM course_group_directors WHERE staff_id = ? AND school_id = ?', staffId, user.school_id)
+      await tx.run('DELETE FROM institutional_staff WHERE id = ? AND school_id = ?', staffId, user.school_id)
+    })
+    await logAudit(user.school_id, user.id, 'institutional_staff_deleted')
+    return json(response, 200, { deleted: true, linkedAccountRetained: true })
+  }
   const staffSignatureMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})\/signature$/i)
   if (staffSignatureMatch && method === 'GET') {
     const staff = await db.get('SELECT signature_data AS data, signature_content_type AS "contentType" FROM institutional_staff WHERE id = ? AND school_id = ? AND is_active = 1', staffSignatureMatch[1], user.school_id)
