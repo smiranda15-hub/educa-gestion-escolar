@@ -1706,8 +1706,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   if (url.pathname === '/api/portal/digital-card' && method === 'GET') {
     if (['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'orientacion', 'tesoreria'].includes(user.role)) {
-      const staff = await db.all(`SELECT p.id, p.full_name AS "fullName", p.position_title AS "positionTitle", p.department, p.is_active AS "isActive", s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
-        FROM institutional_staff p JOIN schools s ON s.id = p.school_id WHERE p.user_id = ? AND p.school_id = ? AND p.is_active = 1`, user.id, user.school_id)
+      const staff = await db.all(`SELECT p.id, p.full_name AS "fullName", p.national_id AS "nationalId", p.position_title AS "positionTitle", p.department, p.is_active AS "isActive", (u.profile_photo_data IS NOT NULL) AS "hasPhoto", s.name AS "schoolName", s.slug AS "schoolSlug", s.primary_color AS "primaryColor", (s.logo_content_type IS NOT NULL) AS "hasLogo"
+        FROM institutional_staff p JOIN schools s ON s.id = p.school_id LEFT JOIN users u ON u.id = p.user_id AND u.school_id = p.school_id WHERE p.user_id = ? AND p.school_id = ? AND p.is_active = 1`, user.id, user.school_id)
       const issuer = await db.get(`SELECT id, full_name AS "fullName", position_title AS "positionTitle", signature_data AS "signatureData", signature_content_type AS "signatureContentType" FROM institutional_staff WHERE school_id = ? AND is_active = 1 AND signature_data IS NOT NULL ORDER BY CASE WHEN user_id = ? THEN 0 WHEN position_key = 'rector' THEN 1 ELSE 2 END, created_at LIMIT 1`, user.school_id, user.id)
       const issuerSignature = issuer?.signatureData && issuer.signatureContentType === 'image/png' ? `data:image/png;base64,${Buffer.from(issuer.signatureData).toString('base64')}` : ''
       return json(response, 200, { cards: [], staffCards: staff.map(person => ({ ...person, isActive: Boolean(person.isActive), cardCode: `EDU-P-${person.id.replaceAll('-', '').slice(0, 12).toUpperCase()}`, issuerName: issuer?.fullName || '', issuerTitle: issuer?.positionTitle || '', issuerSignature })) })
@@ -1729,6 +1729,16 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!photo?.data || !['image/jpeg', 'image/png', 'image/webp'].includes(photo.contentType)) return json(response, 404, { error: 'No hay una foto disponible.' })
     response.writeHead(200, { 'Content-Type': photo.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
     return response.end(photo.data)
+  }
+  const portalStaffPhotoMatch = url.pathname.match(/^\/api\/portal\/digital-card\/staff\/([0-9a-f-]{36})\/photo$/i)
+  if (portalStaffPhotoMatch && method === 'GET') {
+    const staff = await db.get(`SELECT p.user_id AS "userId", u.profile_photo_data AS data, u.profile_photo_content_type AS "contentType"
+      FROM institutional_staff p LEFT JOIN users u ON u.id = p.user_id AND u.school_id = p.school_id
+      WHERE p.id = ? AND p.school_id = ? AND p.is_active = 1`, portalStaffPhotoMatch[1], user.school_id)
+    if (!staff || (staff.userId !== user.id && !institutionalManagerRoles.includes(user.role))) return json(response, 403, { error: 'No tienes permiso para consultar esta foto.' })
+    if (!staff.data || !['image/jpeg', 'image/png', 'image/webp'].includes(staff.contentType)) return json(response, 404, { error: 'No hay una foto de perfil disponible.' })
+    response.writeHead(200, { 'Content-Type': staff.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
+    return response.end(staff.data)
   }
   const certificateRoles = ['admin', 'rectoria', 'coordinacion', 'secretaria']
   const studentHistoryMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})\/academic-history$/i)
@@ -1971,8 +1981,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
   if (url.pathname.startsWith('/api/institutional-staff') && !institutionalManagerRoles.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar personal y firmas institucionales.' })
   if (url.pathname === '/api/institutional-staff' && method === 'GET') {
-    const staff = await db.all(`SELECT id, user_id AS "userId", full_name AS "fullName", national_id AS "nationalId", position_key AS "positionKey", position_title AS "positionTitle", email, phone, department, signature_file_name AS "signatureFileName", (signature_data IS NOT NULL) AS "hasSignature", is_active AS "isActive"
-      FROM institutional_staff WHERE school_id = ? ORDER BY is_active DESC, position_title, full_name`, user.school_id)
+    const staff = await db.all(`SELECT p.id, p.user_id AS "userId", p.full_name AS "fullName", p.national_id AS "nationalId", p.position_key AS "positionKey", p.position_title AS "positionTitle", p.email, p.phone, p.department, p.signature_file_name AS "signatureFileName", (p.signature_data IS NOT NULL) AS "hasSignature", (u.profile_photo_data IS NOT NULL) AS "hasPhoto", p.is_active AS "isActive"
+      FROM institutional_staff p LEFT JOIN users u ON u.id = p.user_id AND u.school_id = p.school_id WHERE p.school_id = ? ORDER BY p.is_active DESC, p.position_title, p.full_name`, user.school_id)
     for (const item of staff) item.courses = (await db.all('SELECT course_id AS "courseId" FROM institutional_staff_courses WHERE staff_id = ?', item.id)).map(row => row.courseId)
     const courses = await db.all('SELECT id, name, grade, academic_year AS "academicYear", is_active AS "isActive" FROM courses WHERE school_id = ? ORDER BY academic_year DESC, grade, name', user.school_id)
     const directors = await db.all('SELECT course_id AS "courseId", staff_id AS "staffId" FROM course_group_directors WHERE school_id = ?', user.school_id)
@@ -2084,6 +2094,16 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     })
     await logAudit(user.school_id, user.id, 'institutional_staff_deleted')
     return json(response, 200, { deleted: true, linkedAccountRetained: true })
+  }
+  const staffPhotoMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})\/photo$/i)
+  if (staffPhotoMatch && method === 'GET') {
+    const staff = await db.get(`SELECT p.user_id AS "userId", u.profile_photo_data AS data, u.profile_photo_content_type AS "contentType"
+      FROM institutional_staff p LEFT JOIN users u ON u.id = p.user_id AND u.school_id = p.school_id
+      WHERE p.id = ? AND p.school_id = ? AND p.is_active = 1`, staffPhotoMatch[1], user.school_id)
+    if (!staff || (staff.userId !== user.id && !institutionalManagerRoles.includes(user.role))) return json(response, 403, { error: 'No tienes permiso para consultar esta foto.' })
+    if (!staff.data || !['image/jpeg', 'image/png', 'image/webp'].includes(staff.contentType)) return json(response, 404, { error: 'No hay una foto de perfil disponible.' })
+    response.writeHead(200, { 'Content-Type': staff.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' })
+    return response.end(staff.data)
   }
   const staffSignatureMatch = url.pathname.match(/^\/api\/institutional-staff\/([0-9a-f-]{36})\/signature$/i)
   if (staffSignatureMatch && method === 'GET') {
