@@ -861,6 +861,27 @@ export async function migrate() {
     `)
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 25)
   }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 26)) {
+    const hasGradeSource = usePostgres
+      ? await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'student_grades' AND column_name = 'grade_source'")
+      : (await db.all('PRAGMA table_info(student_grades)')).some(item => item.name === 'grade_source')
+    if (!hasGradeSource) await db.exec("ALTER TABLE student_grades ADD COLUMN grade_source TEXT NOT NULL DEFAULT 'manual'")
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS google_form_grade_sync (
+        assessment_id TEXT NOT NULL REFERENCES grade_assessments(id) ON DELETE CASCADE,
+        response_id TEXT NOT NULL,
+        school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+        student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        submitted_at TEXT NOT NULL,
+        source_score REAL NOT NULL,
+        source_max_score REAL NOT NULL,
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (assessment_id, response_id)
+      );
+      CREATE INDEX IF NOT EXISTS google_form_grade_sync_student_idx ON google_form_grade_sync(assessment_id, student_id, submitted_at);
+    `)
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 26)
+  }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)

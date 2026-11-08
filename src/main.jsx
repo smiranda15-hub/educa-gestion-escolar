@@ -2370,7 +2370,7 @@ function App() {
             <label>Fecha límite<input name="dueAt" type="date"/></label>
             <label>Video de apoyo de YouTube (opcional)<input name="videoUrl" type="url" maxLength="1000" placeholder="https://www.youtube.com/watch?v=…"/><span className="field-hint">Se reproduce dentro de Mi aula.</span></label>
             {assessmentMode === 'file' && <>
-              <label>Enlace de Google Forms (opcional)<input name="externalFormUrl" type="url" maxLength="1000" placeholder="https://forms.gle/…"/><span className="field-hint">El estudiante abre el formulario desde Mi aula.</span></label>
+              <label>Enlace de Google Forms (opcional)<input name="externalFormUrl" type="url" maxLength="1000" placeholder="https://forms.gle/…"/><span className="field-hint">El estudiante lo abre desde Mi aula. Para sincronizar notas, configura el script de integración de EDUCA y pega exactamente este mismo enlace.</span></label>
               <label>Imágenes de apoyo (opcional)<input name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple/><span className="field-hint">Hasta 5 imágenes · máximo 4 MB cada una.</span></label>
             </>}
           </>}

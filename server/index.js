@@ -373,9 +373,75 @@ const legalTermsVersion = '2026-11-03-v1'
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
   const method = request.method || 'GET'
-  if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
+  const googleFormsWebhook = method === 'POST' && url.pathname === '/api/integrations/google-forms/webhook'
+  if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !googleFormsWebhook && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
+  if (googleFormsWebhook) {
+    const configuredSecret = String(process.env.EDUCA_FORMS_WEBHOOK_SECRET || '')
+    const suppliedSecret = String(request.headers['x-educa-forms-key'] || '')
+    if (!configuredSecret || !suppliedSecret || !timingSafeEqual(createHash('sha256').update(suppliedSecret).digest(), createHash('sha256').update(configuredSecret).digest())) return json(response, 401, { error: 'Credencial de integración no válida.' })
+    const body = await readBody(request)
+    const formUrl = String(body.formUrl || '').trim()
+    const responseId = String(body.responseId || '').trim()
+    const respondentEmail = String(body.respondentEmail || '').trim().toLowerCase()
+    const sourceScore = Number(body.score)
+    const sourceMaxScore = Number(body.maxScore)
+    const submittedAt = String(body.submittedAt || '').trim()
+    const submittedTime = Date.parse(submittedAt)
+    if (!formUrl || formUrl.length > 1000 || !validGoogleFormsUrl(formUrl) || !responseId || responseId.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(respondentEmail) || !Number.isFinite(sourceScore) || !Number.isFinite(sourceMaxScore) || sourceMaxScore <= 0 || sourceScore < 0 || sourceScore > sourceMaxScore || !Number.isFinite(submittedTime)) return json(response, 400, { error: 'La respuesta del formulario está incompleta o no es válida.' })
+    const matches = await db.all(`SELECT a.id, a.school_id AS "schoolId", a.course_id AS "courseId", a.subject, a.title,
+        a.max_score AS "maxScore", a.created_by AS "createdBy", c.grade, c.academic_year AS "academicYear"
+      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
+      WHERE a.external_form_url = ? AND a.activity_type = 'assignment' AND a.is_published = 1 AND c.is_active = 1`, formUrl)
+    if (!matches.length) return json(response, 404, { error: 'No hay una actividad publicada en EDUCA con este enlace de Google Forms.' })
+    if (matches.length !== 1) return json(response, 409, { error: 'Este enlace está asociado a más de una actividad. Usa un enlace único por evaluación.' })
+    const assessment = matches[0]
+    const student = await db.get(`SELECT st.id, st.full_name AS name FROM users u
+      JOIN user_students us ON us.user_id = u.id AND us.relationship = 'estudiante'
+      JOIN students st ON st.id = us.student_id AND st.school_id = u.school_id
+      WHERE u.school_id = ? AND u.role = 'estudiante' AND u.is_active = 1 AND u.deleted_at IS NULL
+        AND LOWER(u.email) = ? AND st.status = 'Activo'`, assessment.schoolId, respondentEmail)
+    if (!student) return json(response, 404, { error: 'No encontramos una cuenta de estudiante activa con el correo que respondió el formulario.' })
+    const enrolled = await db.get(`SELECT st.id FROM students st WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo'
+      AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
+        AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
+        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se
+          WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`,
+      student.id, assessment.schoolId, assessment.courseId, assessment.academicYear, assessment.grade)
+    if (!enrolled) return json(response, 403, { error: 'El estudiante no está matriculado en el curso de esta evaluación.' })
+    const score = Math.round((sourceScore / sourceMaxScore) * Number(assessment.maxScore) * 100) / 100
+    const syncedAt = new Date().toISOString()
+    let outcome = 'synced'
+    await db.transaction(async tx => {
+      const existingResponse = await tx.get('SELECT submitted_at AS "submittedAt" FROM google_form_grade_sync WHERE assessment_id = ? AND response_id = ?', assessment.id, responseId)
+      const latestOtherResponse = await tx.get(`SELECT response_id AS "responseId", submitted_at AS "submittedAt" FROM google_form_grade_sync
+        WHERE assessment_id = ? AND student_id = ? AND response_id <> ? ORDER BY submitted_at DESC LIMIT 1`, assessment.id, student.id, responseId)
+      if (!existingResponse && latestOtherResponse && Date.parse(latestOtherResponse.submittedAt) > submittedTime) {
+        outcome = 'older_response_ignored'
+        return
+      }
+      if (existingResponse && Date.parse(existingResponse.submittedAt) > submittedTime) {
+        outcome = 'older_response_ignored'
+        return
+      }
+      await tx.run(`INSERT INTO google_form_grade_sync (assessment_id, response_id, school_id, student_id, submitted_at, source_score, source_max_score, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(assessment_id, response_id) DO UPDATE SET student_id = excluded.student_id, submitted_at = excluded.submitted_at,
+          source_score = excluded.source_score, source_max_score = excluded.source_max_score, synced_at = excluded.synced_at`,
+        assessment.id, responseId, assessment.schoolId, student.id, new Date(submittedTime).toISOString(), sourceScore, sourceMaxScore, syncedAt)
+      await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at, grade_source)
+        VALUES (?, ?, ?, ?, ?, ?, 'google_forms')
+        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment,
+          updated_by = excluded.updated_by, updated_at = excluded.updated_at, grade_source = 'google_forms'
+        WHERE student_grades.grade_source = 'google_forms'`, assessment.id, student.id, score,
+        'Calificación sincronizada desde Google Forms', assessment.createdBy, syncedAt)
+      const grade = await tx.get('SELECT grade_source AS source FROM student_grades WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
+      if (grade?.source === 'manual') outcome = 'manual_grade_preserved'
+    })
+    if (outcome === 'synced') await logAudit(assessment.schoolId, null, 'google_forms_grade_synced')
+    return json(response, 200, { received: true, outcome })
+  }
   const staffCardVerificationMatch = url.pathname.match(/^\/api\/public\/staff-card\/([0-9a-f-]{36})$/i)
   if (method === 'GET' && staffCardVerificationMatch) {
     const record = await db.get(`SELECT p.id, p.full_name AS "staffName", p.position_title AS "positionTitle", p.is_active AS "isActive",
@@ -2712,9 +2778,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`,
       record.studentId, user.school_id, assessment.courseId, assessment.academicYear, assessment.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este curso activo.' })
     await db.transaction(async tx => {
-      for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at, grade_source)
+        VALUES (?, ?, ?, ?, ?, ?, 'manual')
+        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at, grade_source = 'manual'`,
         assessment.id, record.studentId, record.score, record.comment, user.id, new Date().toISOString())
     })
     await logAudit(user.school_id, user.id, 'grade_records_saved')
