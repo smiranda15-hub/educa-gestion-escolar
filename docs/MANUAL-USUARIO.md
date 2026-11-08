@@ -145,6 +145,15 @@ Consulta actividades publicadas, detalles, fechas e inscripción cuando esté ha
 
 El autor o un administrador autorizado crea comunicados y selecciona destinatarios o cursos. Revisa cuidadosamente el público antes de enviar. El sistema conserva el historial y puede notificar por bandeja, correo o push según configuración. El autor/administrador puede eliminar conforme a permisos; la eliminación afecta la bandeja de destinatarios asociada.
 
+### Mensajería privada
+
+1. Abre **Mensajería** en la navegación.
+2. Usa **Recibidos** para leer conversaciones entrantes y **Enviados** para consultar las que iniciaste.
+3. Pulsa **Nuevo mensaje**, selecciona una persona autorizada, escribe el asunto y el mensaje, y envíalo.
+4. Abre una conversación para leerla y responder. La respuesta queda dentro del mismo hilo.
+
+La lista de destinatarios depende del rol, de que la cuenta esté activa y de sus relaciones académicas. Estudiantes y acudientes pueden escribir a rectoría, coordinación, secretaría, orientación y tesorería, además de docentes vinculados a sus cursos. Los docentes pueden contactar estudiantes y acudientes de los grupos que tienen asignados. La mensajería es privada entre participantes; las notificaciones en pantalla o en el teléfono solo anuncian que hay un mensaje nuevo.
+
 ## 9. Aula, evaluaciones, notas y boletines
 
 ### Crear actividad o evaluación (docentes)

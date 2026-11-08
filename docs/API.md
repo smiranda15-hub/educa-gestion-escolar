@@ -58,6 +58,17 @@ Todas las rutas están bajo `/api`. JSON usa UTF-8. Las rutas de archivos pueden
 | `GET /communications/options`, `GET /communications`, `POST /communications` | Opciones, consulta y creación de comunicados. |
 | `POST /communications/:id/read`, `DELETE /communications/:id` | Marca leído y elimina dentro de permisos. |
 
+## Mensajería privada
+
+| Ruta | Finalidad |
+| --- | --- |
+| `GET /messages/recipients` | Devuelve cuentas activas del mismo colegio a las que la sesión puede escribir. |
+| `GET /messages?folder=inbox\|sent` | Lista conversaciones recibidas o enviadas e indica mensajes sin leer. |
+| `GET /messages/:threadId` | Consulta una conversación propia y marca como leídos sus mensajes entrantes. |
+| `POST /messages` | Crea una conversación con `recipientId`, `subject`, `body`, o responde con `threadId` y `body`. |
+
+Los permisos se validan en el servidor. Personal autorizado puede comunicarse dentro del colegio; estudiantes y acudientes pueden escribir a cargos institucionales y docentes relacionados con sus cursos; docentes pueden escribir a familias y estudiantes de sus cursos. Cada envío genera una notificación interna y, si el dispositivo está registrado, push sin exponer el texto privado.
+
 ## Estudiantes, usuarios y matrículas
 
 | Rutas | Uso |

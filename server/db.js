@@ -833,6 +833,25 @@ export async function migrate() {
     if (!exists) await db.exec("ALTER TABLE enrollment_requests ADD COLUMN guardian_email TEXT NOT NULL DEFAULT ''")
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 24)
   }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 25)) {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS direct_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+        sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        read_at TEXT,
+        created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+      );
+      CREATE INDEX IF NOT EXISTS direct_messages_thread_idx ON direct_messages(school_id, thread_id, created_at);
+      CREATE INDEX IF NOT EXISTS direct_messages_inbox_idx ON direct_messages(school_id, recipient_id, read_at, created_at);
+      CREATE INDEX IF NOT EXISTS direct_messages_sender_idx ON direct_messages(school_id, sender_id, created_at);
+    `)
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 25)
+  }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)

@@ -92,6 +92,32 @@ const defaultSignatureRules = {
   report_card: ['group_director', 'rector'], study_certificate: ['rector', 'academic_secretary'],
   academic_certificate: ['rector', 'academic_coordinator'], academic_report: ['group_director', 'academic_coordinator'], other: ['other', '']
 }
+const directMessageStaffRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'orientacion', 'tesoreria', 'docente'])
+const directMessageOfficeRoles = new Set(['admin', 'rectoria', 'coordinacion', 'secretaria', 'orientacion', 'tesoreria'])
+async function canDirectMessage(sender, recipient) {
+  if (!sender || !recipient || sender.school_id !== recipient.school_id || sender.id === recipient.id) return false
+  const senderRole = sender.role
+  const recipientRole = recipient.role
+  const familyRoles = ['estudiante', 'acudiente']
+  if (![...directMessageStaffRoles, ...familyRoles].includes(senderRole) || ![...directMessageStaffRoles, ...familyRoles].includes(recipientRole)) return false
+  if (['admin', 'rectoria', 'coordinacion', 'secretaria', 'orientacion', 'tesoreria'].includes(senderRole)) return true
+  if (directMessageOfficeRoles.has(recipientRole)) return true
+  if (senderRole === 'docente' && ['estudiante', 'acudiente'].includes(recipientRole)) {
+    return Boolean(await db.get(`SELECT 1 FROM user_students us
+      JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
+      JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade AND c.is_active = 1
+      JOIN course_teachers ct ON ct.course_id = c.id AND ct.user_id = ?
+      WHERE us.user_id = ? AND us.relationship = ? LIMIT 1`, sender.school_id, sender.id, recipient.id, recipientRole === 'estudiante' ? 'estudiante' : 'acudiente'))
+  }
+  if (['estudiante', 'acudiente'].includes(senderRole) && recipientRole === 'docente') {
+    return Boolean(await db.get(`SELECT 1 FROM user_students us
+      JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
+      JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade AND c.is_active = 1
+      JOIN course_teachers ct ON ct.course_id = c.id AND ct.user_id = ?
+      WHERE us.user_id = ? AND us.relationship = ? LIMIT 1`, sender.school_id, recipient.id, sender.id, senderRole))
+  }
+  return directMessageStaffRoles.has(senderRole) && directMessageStaffRoles.has(recipientRole)
+}
 let pushMessagingPromise
 let emailTransportPromise
 const isEmailConfigured = () => Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM) || Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
@@ -1487,6 +1513,101 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     await db.transaction(async tx => { await tx.run('DELETE FROM communications WHERE id = ? AND school_id = ?', communication.id, user.school_id) })
     await logAudit(user.school_id, user.id, `communication_deleted:${communication.id}`)
     return json(response, 200, { deleted: true })
+  }
+
+  if (url.pathname === '/api/messages/recipients' && method === 'GET') {
+    const officeRoles = "'admin','rectoria','coordinacion','secretaria','orientacion','tesoreria'"
+    const assignedToTeacher = `EXISTS (SELECT 1 FROM user_students us JOIN students st ON st.id = us.student_id
+      JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade AND c.is_active = 1
+      JOIN course_teachers ct ON ct.course_id = c.id AND ct.user_id = ?
+      WHERE us.user_id = u.id AND st.school_id = u.school_id AND st.status = 'Activo')`
+    let recipientRule = '1 = 0'
+    const recipientParams = []
+    if (directMessageOfficeRoles.has(user.role)) recipientRule = '1 = 1'
+    else if (user.role === 'docente') {
+      recipientRule = `u.role IN (${officeRoles}) OR u.role = 'docente' OR (u.role IN ('estudiante','acudiente') AND ${assignedToTeacher})`
+      recipientParams.push(user.id)
+    } else if (['estudiante', 'acudiente'].includes(user.role)) {
+      recipientRule = `u.role IN (${officeRoles}) OR (u.role = 'docente' AND ${assignedToTeacher.replace('us.user_id = u.id', 'us.user_id = ?').replace('ct.user_id = ?', 'ct.user_id = u.id')})`
+      recipientParams.push(user.id)
+    }
+    const accounts = await db.all(`SELECT DISTINCT u.id, u.full_name AS name, u.email, u.role FROM users u
+      WHERE u.school_id = ? AND u.is_active = 1 AND u.deleted_at IS NULL AND u.id <> ? AND (${recipientRule})
+      ORDER BY u.full_name LIMIT 2000`, user.school_id, user.id, ...recipientParams)
+    return json(response, 200, { recipients: accounts })
+  }
+  if (url.pathname === '/api/messages' && method === 'GET') {
+    const folder = String(url.searchParams.get('folder') || 'inbox')
+    if (!['inbox', 'sent'].includes(folder)) return json(response, 400, { error: 'Selecciona una bandeja válida.' })
+    const rows = await db.all(`SELECT m.id, m.thread_id AS "threadId", m.sender_id AS "senderId", m.recipient_id AS "recipientId",
+        m.subject, m.body, m.read_at AS "readAt", m.created_at AS "createdAt",
+        sender.full_name AS "senderName", recipient.full_name AS "recipientName"
+      FROM direct_messages m
+      JOIN users sender ON sender.id = m.sender_id AND sender.school_id = m.school_id
+      JOIN users recipient ON recipient.id = m.recipient_id AND recipient.school_id = m.school_id
+      WHERE m.school_id = ? AND (m.sender_id = ? OR m.recipient_id = ?)
+      ORDER BY m.created_at DESC LIMIT 2000`, user.school_id, user.id, user.id)
+    const threads = new Map()
+    for (const row of rows) {
+      let thread = threads.get(row.threadId)
+      if (!thread) {
+        thread = { id: row.threadId, subject: row.subject, latestMessage: row.body.slice(0, 220), latestAt: row.createdAt, counterpartId: row.senderId === user.id ? row.recipientId : row.senderId, counterpartName: row.senderId === user.id ? row.recipientName : row.senderName, hasIncoming: false, hasOutgoing: false, unreadCount: 0 }
+        threads.set(row.threadId, thread)
+      }
+      if (row.recipientId === user.id) {
+        thread.hasIncoming = true
+        if (!row.readAt) thread.unreadCount += 1
+      }
+      if (row.senderId === user.id) thread.hasOutgoing = true
+    }
+    const result = [...threads.values()].filter(thread => folder === 'inbox' ? thread.hasIncoming : thread.hasOutgoing)
+    return json(response, 200, { threads: result })
+  }
+  const directThreadMatch = url.pathname.match(/^\/api\/messages\/([0-9a-f-]{36})$/i)
+  if (directThreadMatch && method === 'GET') {
+    const threadId = directThreadMatch[1]
+    const exists = await db.get('SELECT id FROM direct_messages WHERE school_id = ? AND thread_id = ? AND (sender_id = ? OR recipient_id = ?) LIMIT 1', user.school_id, threadId, user.id, user.id)
+    if (!exists) return json(response, 404, { error: 'No encontramos esa conversación en tu bandeja.' })
+    await db.run('UPDATE direct_messages SET read_at = CURRENT_TIMESTAMP WHERE school_id = ? AND thread_id = ? AND recipient_id = ? AND read_at IS NULL', user.school_id, threadId, user.id)
+    const messages = await db.all(`SELECT m.id, m.thread_id AS "threadId", m.sender_id AS "senderId", m.recipient_id AS "recipientId",
+        m.subject, m.body, m.read_at AS "readAt", m.created_at AS "createdAt", sender.full_name AS "senderName"
+      FROM direct_messages m JOIN users sender ON sender.id = m.sender_id AND sender.school_id = m.school_id
+      WHERE m.school_id = ? AND m.thread_id = ? AND (m.sender_id = ? OR m.recipient_id = ?) ORDER BY m.created_at, m.id`, user.school_id, threadId, user.id, user.id)
+    return json(response, 200, { messages })
+  }
+  if (url.pathname === '/api/messages' && method === 'POST') {
+    const body = await readBody(request)
+    const requestedRecipientId = String(body.recipientId || '').trim()
+    const threadId = String(body.threadId || '').trim()
+    const content = String(body.body || '').trim()
+    if (content.length < 1 || content.length > 10000) return json(response, 400, { error: 'El mensaje debe tener entre 1 y 10.000 caracteres.' })
+    if (threadId && !/^[0-9a-f-]{36}$/i.test(threadId)) return json(response, 400, { error: 'La conversación no es válida.' })
+    let recipientId = requestedRecipientId
+    let subject = String(body.subject || '').trim()
+    if (threadId) {
+      const prior = await db.get(`SELECT id, subject, sender_id AS "senderId", recipient_id AS "recipientId"
+        FROM direct_messages WHERE school_id = ? AND thread_id = ? AND (sender_id = ? OR recipient_id = ?)
+        ORDER BY created_at LIMIT 1`, user.school_id, threadId, user.id, user.id)
+      if (!prior) return json(response, 404, { error: 'No encontramos esa conversación.' })
+      const otherId = prior.senderId === user.id ? prior.recipientId : prior.senderId
+      if (requestedRecipientId && requestedRecipientId !== otherId) return json(response, 403, { error: 'No puedes cambiar el destinatario de esta conversación.' })
+      recipientId = otherId
+      subject = prior.subject
+    }
+    if (subject.length < 3 || subject.length > 160) return json(response, 400, { error: 'El asunto debe tener entre 3 y 160 caracteres.' })
+    const recipient = await db.get(`SELECT id, school_id, full_name AS name, role FROM users
+      WHERE id = ? AND school_id = ? AND is_active = 1 AND deleted_at IS NULL`, recipientId, user.school_id)
+    if (!recipient) return json(response, 404, { error: 'La cuenta destinataria no está disponible en este colegio.' })
+    if (!await canDirectMessage(user, recipient)) return json(response, 403, { error: 'No tienes autorización para iniciar o responder a esta conversación.' })
+    const senderName = String(user.full_name || user.name || 'Un usuario')
+    const conversationId = threadId || randomUUID()
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO direct_messages (id, thread_id, school_id, sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), conversationId, user.school_id, user.id, recipientId, subject, content)
+      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipientId, `Nuevo mensaje de ${senderName}`, 'Abre Mensajería en EDUCA para leerlo.', 'message')
+    })
+    await sendPushNotifications(user.school_id, [recipientId], `Nuevo mensaje de ${senderName}`, 'Abre EDUCA para leer tu mensaje privado.', 'message', conversationId)
+    await logAudit(user.school_id, user.id, `direct_message_sent:${conversationId}`)
+    return json(response, 201, { sent: true, threadId: conversationId })
   }
 
   if (url.pathname === '/api/reports/options' && method === 'GET') {

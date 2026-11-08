@@ -53,9 +53,11 @@ El frontend usa rutas hash y solicitudes same-origin a `/api`. En desarrollo Vit
 
 ## 5. Base de datos y migraciones
 
-`server/db.js` ofrece una interfaz común (`get`, `all`, `run`, `exec`, transacciones) para SQLite y PostgreSQL. El esquema incluye, entre otras, tablas para instituciones, usuarios y sesiones; estudiantes y relaciones familiares; cursos, matrículas e historial; periodos; asistencia y justificaciones; notas, evaluaciones e intentos; personal y firmas; eventos y comunicaciones; certificados; notificaciones y tokens push; pagos; auditoría y control documental.
+`server/db.js` ofrece una interfaz común (`get`, `all`, `run`, `exec`, transacciones) para SQLite y PostgreSQL. El esquema incluye, entre otras, tablas para instituciones, usuarios y sesiones; estudiantes y relaciones familiares; cursos, matrículas e historial; periodos; asistencia y justificaciones; notas, evaluaciones e intentos; personal y firmas; eventos, comunicados y mensajes privados (`direct_messages`); certificados; notificaciones y tokens push; pagos; auditoría y control documental.
 
 `migrate()` se ejecuta al arrancar el servidor. Las migraciones se versionan con `schema_migrations` y se aplican de forma idempotente; una nueva modificación de esquema debe tener una migración versionada, válida para ambos motores. No se deben editar manualmente las tablas de producción para corregir datos sin respaldo y sin una migración revisable.
+
+La mensajería privada se restringe por institución y participantes. El backend valida el acceso al hilo y los permisos por rol/curso en cada solicitud; la notificación push no contiene el cuerpo privado.
 
 SQLite usa por defecto `./data/educa.sqlite`. PostgreSQL se activa cuando está presente `DATABASE_URL`. En Railway, configura una referencia desde el servicio de EDUCA a la variable de la base PostgreSQL; no pegues credenciales de base dentro del código.
 

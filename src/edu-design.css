@@ -495,3 +495,48 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .report-card-grid-note, .report-card-disclaimer { font-size: 7px; }
 }
 
+
+/* Private school mailbox */
+.messaging-layout{display:grid;grid-template-columns:minmax(290px,360px) minmax(0,1fr);min-height:620px;overflow:hidden;border:1px solid #dce5ec;border-radius:16px;background:#fff;box-shadow:var(--shadow-card)}
+.messaging-sidebar{display:flex;min-width:0;flex-direction:column;border-right:1px solid #e8edf3;background:#fbfcfe}
+.messaging-folders{display:flex;gap:8px;padding:14px;border-bottom:1px solid #edf0f5}
+.messaging-folders button{display:flex;min-height:38px;align-items:center;gap:8px;padding:0 12px;border:1px solid transparent;border-radius:9px;background:transparent;color:#536579;font:inherit;font-size:12px;font-weight:600}
+.messaging-folders button.messaging-folder-active{border-color:#d9e7ef;background:#eaf3f7;color:#1d5877}
+.messaging-folders button span{display:grid;min-width:20px;height:20px;place-items:center;border-radius:12px;background:#dcecf3;color:#1d5877;font-size:10px}
+.messaging-search{display:flex;align-items:center;gap:8px;margin:12px;padding:0 11px;border:1px solid #dce5ec;border-radius:9px;background:#fff;color:#8292a2}
+.messaging-search input{width:100%;min-width:0;height:38px;border:0;outline:0;background:transparent;color:#263b4d;font:inherit;font-size:12px}
+.messaging-thread-list{flex:1;overflow:auto}
+.messaging-thread-item{position:relative;display:flex;width:100%;min-width:0;align-items:flex-start;gap:10px;padding:13px 12px;border:0;border-bottom:1px solid #edf0f5;background:#fff;text-align:left}
+.messaging-thread-item:hover,.messaging-thread-active{background:#f0f6f9}
+.messaging-avatar{display:grid;width:38px;height:38px;flex:none;place-items:center;border-radius:50%;background:#e6f0f4;color:#245d78;font-size:14px;font-weight:750}
+.messaging-thread-copy{display:grid;min-width:0;flex:1;gap:4px}
+.messaging-thread-top{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:5px}
+.messaging-thread-top strong{overflow:hidden;color:#243a4c;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.messaging-thread-top time{flex:none;color:#8292a2;font-size:9px}
+.messaging-thread-copy>b{overflow:hidden;color:#394e60;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.messaging-thread-copy small{overflow:hidden;color:#758698;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.messaging-thread-item>i{width:8px;height:8px;flex:none;margin-top:15px;border-radius:50%;background:#347f9f}
+.messaging-list-empty{display:grid;min-height:140px;place-items:center;padding:20px;color:#718396;font-size:12px;text-align:center}
+.messaging-conversation{display:flex;min-width:0;min-height:0;flex-direction:column;background:#fff}
+.messaging-conversation-heading{display:flex;align-items:center;gap:11px;padding:15px 20px;border-bottom:1px solid #e9edf2}
+.messaging-conversation-heading h2{margin:0;color:#253c4f;font:700 14px Manrope,sans-serif}
+.messaging-conversation-heading p{margin:3px 0 0;color:#718396;font-size:11px}
+.messaging-message-list{display:flex;min-height:280px;flex:1;flex-direction:column;gap:12px;overflow:auto;padding:20px;background:#fbfcfe}
+.messaging-bubble{max-width:min(78%,640px);align-self:flex-start;padding:12px 14px;border:1px solid #e2e9ee;border-radius:13px 13px 13px 4px;background:#fff}
+.messaging-bubble-mine{align-self:flex-end;border-color:#d8e8ef;border-radius:13px 13px 4px 13px;background:#edf6f8}
+.messaging-bubble-meta{display:flex;align-items:center;gap:12px;color:#566b7c;font-size:10px}
+.messaging-bubble-meta time{color:#8a9aa8;font-size:9px}
+.messaging-bubble p{margin:8px 0 0;color:#2f4354;font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.messaging-reply-form{display:grid;gap:8px;padding:14px 18px;border-top:1px solid #e9edf2}
+.messaging-reply-form label,.messaging-compose-dialog form label{display:grid;gap:6px;color:#3d5365;font-size:11px;font-weight:650}
+.messaging-reply-form textarea,.messaging-compose-dialog textarea,.messaging-compose-dialog select,.messaging-compose-dialog input{width:100%;min-height:40px;padding:10px 11px;border:1px solid #dce5ec;border-radius:9px;background:#fff;color:#263b4d;font:inherit;font-size:12px}
+.messaging-reply-form textarea,.messaging-compose-dialog textarea{resize:vertical;line-height:1.55}
+.messaging-reply-form>div{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.messaging-reply-form>div>span{color:#8796a4;font-size:10px}
+.messaging-welcome{display:grid;min-height:100%;align-content:center;justify-items:center;gap:12px;padding:28px;text-align:center}
+.messaging-welcome>span{display:grid;width:54px;height:54px;place-items:center;border-radius:16px;background:#eaf3f7;color:#286887}
+.messaging-welcome h2{margin:0;color:#263c4e;font:700 19px Manrope,sans-serif}
+.messaging-welcome p{max-width:350px;margin:0 0 5px;color:#708293;font-size:12px;line-height:1.6}
+.messaging-compose-dialog form{display:grid;gap:14px}
+@media(max-width:760px){.messaging-layout{grid-template-columns:1fr;min-height:680px}.messaging-sidebar{max-height:330px;border-right:0;border-bottom:1px solid #e8edf3}.messaging-conversation{min-height:430px}.messaging-message-list{min-height:220px;padding:14px}.messaging-bubble{max-width:92%}}
+@media(max-width:480px){.messaging-page .students-title{align-items:flex-start}.messaging-page .students-title>.students-actions{width:auto}.messaging-page .students-title .button{min-height:38px;padding:0 10px;font-size:11px}.messaging-folders{padding:10px}.messaging-thread-item{padding:11px 10px}.messaging-conversation-heading{padding:12px}.messaging-reply-form{padding:12px}.messaging-bubble p{font-size:12px}}
