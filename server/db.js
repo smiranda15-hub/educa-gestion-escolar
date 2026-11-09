@@ -509,6 +509,17 @@ export async function migrate() {
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
     CREATE INDEX IF NOT EXISTS school_events_school_date_idx ON school_events(school_id, event_date);
+    CREATE TABLE IF NOT EXISTS event_attendance_records (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      event_id TEXT NOT NULL REFERENCES school_events(id) ON DELETE CASCADE,
+      student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      record_type TEXT NOT NULL CHECK (record_type IN ('Ingreso','Salida','PAE')),
+      recorded_by TEXT NOT NULL REFERENCES users(id),
+      recorded_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      UNIQUE (event_id, student_id, record_type)
+    );
+    CREATE INDEX IF NOT EXISTS event_attendance_scope_idx ON event_attendance_records(school_id, event_id, record_type, recorded_at);
     CREATE TABLE IF NOT EXISTS activity_registrations (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
@@ -520,6 +531,28 @@ export async function migrate() {
       UNIQUE (event_id, student_id)
     );
     CREATE INDEX IF NOT EXISTS activity_registrations_event_idx ON activity_registrations(school_id, event_id, status);
+    CREATE TABLE IF NOT EXISTS school_surveys (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      course_id TEXT REFERENCES courses(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      options_json TEXT NOT NULL,
+      closes_at TEXT,
+      is_published INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS school_surveys_scope_idx ON school_surveys(school_id, is_published, created_at);
+    CREATE TABLE IF NOT EXISTS survey_votes (
+      survey_id TEXT NOT NULL REFERENCES school_surveys(id) ON DELETE CASCADE,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      option_index INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      PRIMARY KEY (survey_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS survey_votes_school_idx ON survey_votes(school_id, survey_id);
     CREATE TABLE IF NOT EXISTS school_certificates (
       id TEXT PRIMARY KEY,
       school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,

@@ -810,3 +810,57 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .top-actions { gap: 2px; }
   .panel { padding: 13px; }
 }
+
+/* Encuestas y votaciones institucionales */
+.surveys-page { display: grid; gap: 20px; }
+.survey-create-form { padding: 22px; }
+.survey-create-form .panel-heading { margin-bottom: 18px; }
+.survey-create-form .panel-heading h2, .survey-card h2 { margin: 0; font-size: 1.2rem; color: var(--ink, #17344d); }
+.survey-create-form .panel-heading p, .survey-card p { margin: 5px 0 0; color: var(--muted, #63788b); }
+.survey-form-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(220px, 1fr); gap: 15px; }
+.survey-form-grid label, .survey-option-editor { display: grid; gap: 7px; color: var(--ink, #17344d); font-weight: 600; }
+.survey-form-grid input, .survey-form-grid select, .survey-form-grid textarea, .survey-option-row input { width: 100%; min-width: 0; border: 1px solid #d7e1eb; border-radius: 10px; padding: 11px 13px; background: #fff; color: #17344d; font: inherit; font-weight: 400; }
+.survey-form-grid textarea { resize: vertical; }
+.survey-description { grid-column: 1 / -1; }
+.survey-option-editor { border: 1px solid #dce5ee; border-radius: 12px; margin: 18px 0; padding: 14px; }
+.survey-option-editor legend { float: none; width: auto; padding: 0 7px; font-size: .9rem; }
+.survey-option-row { display: flex; align-items: center; gap: 10px; }
+.survey-option-row > span { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; background: #edf5f7; color: #287487; }
+.survey-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.survey-list { display: grid; gap: 16px; }
+.survey-card { padding: 20px; }
+.survey-card-header { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #e9eef3; }
+.survey-context { display: block; margin-bottom: 7px; color: #607a8d; font-size: .8rem; }
+.survey-card-meta { display: flex; align-items: flex-start; gap: 9px; }
+.survey-vote-form { display: grid; gap: 10px; margin-top: 15px; }
+.survey-choice { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 10px; overflow: hidden; min-height: 48px; padding: 10px 13px; border: 1px solid #dce5ee; border-radius: 10px; background: #fff; color: #183852; cursor: pointer; }
+.survey-choice-selected { border-color: #4cae9b; background: #f1faf7; }
+.survey-choice input { accent-color: #297b85; }
+.survey-choice > span, .survey-choice > input { z-index: 1; }
+.survey-result-count { color: #60768a; font-size: .85rem; }
+.survey-choice > i { position: absolute; z-index: 0; inset: auto auto 0 0; height: 3px; width: var(--survey-percent, 0); background: #42a890; }
+.survey-vote-form > .button { justify-self: start; }
+@media (max-width: 700px) {
+  .survey-create-form, .survey-card { padding: 16px; }
+  .survey-form-grid { grid-template-columns: 1fr; }
+  .survey-description { grid-column: auto; }
+  .survey-form-footer, .survey-card-header { align-items: stretch; flex-direction: column; }
+  .survey-card-meta { align-items: center; justify-content: space-between; }
+  .survey-choice { grid-template-columns: 20px minmax(0, 1fr); }
+  .survey-result-count { grid-column: 2; }
+  .survey-form-footer > .button { width: 100%; justify-content: center; }
+}
+/* Registro de acceso a eventos y consumo PAE */
+.event-attendance-details { margin-top: .85rem; border: 1px solid var(--line, #d8e4eb); border-radius: 14px; background: #f8fbfc; overflow: hidden; }
+.event-attendance-details > summary { display: flex; align-items: center; gap: .55rem; padding: .8rem 1rem; color: var(--ink, #17334b); font-weight: 700; cursor: pointer; list-style: none; }
+.event-attendance-details > summary::-webkit-details-marker { display: none; }
+.event-attendance-panel { display: grid; gap: .8rem; padding: 0 1rem 1rem; }
+.event-attendance-tools { display: flex; align-items: end; flex-wrap: wrap; gap: .65rem; }
+.event-attendance-tools label { flex: 1 1 260px; min-width: 190px; }
+.event-attendance-tools label input, .event-attendance-tools label select { display: block; width: 100%; margin-top: .35rem; }
+.event-attendance-summary { display: flex; flex-wrap: wrap; gap: .55rem; }
+.event-attendance-summary strong { padding: .4rem .7rem; border-radius: 999px; background: #e8f3f3; color: #205c61; font-size: .9rem; }
+.event-attendance-records { display: grid; gap: .35rem; }
+.event-attendance-records > div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem .6rem; border-bottom: 1px solid #e4ebef; }
+.event-qr-camera { width: min(100%, 440px); aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: #102a3b; }
+@media (max-width: 640px) { .event-attendance-tools > button { flex: 1 1 100%; min-height: 44px; } .event-attendance-records > div { flex-direction: column; gap: .2rem; } }
