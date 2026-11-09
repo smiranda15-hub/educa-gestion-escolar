@@ -1077,3 +1077,33 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .report-card-page .report-card-filters .student-filter{min-width:150px}
 .report-card-page .report-card-document{font-size:14px;line-height:1.5}
 @media(max-width:760px){.portal-classroom-toolbar{align-items:stretch;flex-direction:column}.portal-classroom-toolbar>.button{width:100%;justify-content:center}.portal-classroom-toolbar .work-student-picker{max-width:none}.justifications-page .justification-table{min-width:900px}}
+
+/* Inicio de sesión alineado con la identidad visual del plantel */
+.login-page[style*="--institution-accent"] .login-card-icon,
+.login-page[style*="--institution-accent"] .login-benefits article>span { color: var(--institution-accent); }
+.login-page[style*="--institution-accent"] .login-card-icon { background: color-mix(in srgb, var(--institution-accent) 10%, white); }
+.login-page.login-school-caldas .login-overline { color: #347a66; }
+.login-page.login-school-caldas .login-overline .live-dot { background: #3e9b79; }
+.login-school-photo { position: relative; isolation: isolate; width: min(100%, 430px); height: 190px; margin-top: 18px; overflow: hidden; border: 1px solid #dce9e3; border-radius: 18px; background: #eaf3ef; box-shadow: 0 16px 35px rgba(25, 57, 47, .13); }
+.login-school-photo>img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center 54%; }
+.login-school-photo-shade { position: absolute; inset: 35% 0 0; background: linear-gradient(transparent, rgba(14, 42, 34, .78)); }
+.login-school-photo-caption { position: absolute; right: 12px; bottom: 12px; left: 12px; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid rgba(255,255,255,.45); border-radius: 12px; background: rgba(255,255,255,.94); box-shadow: 0 8px 22px rgba(18, 43, 36, .15); }
+.login-school-photo-caption>span { flex: 0 0 36px; width: 36px; height: 36px; overflow: hidden; border-radius: 9px; }
+.login-school-photo-caption .school-option-avatar { width: 100%; height: 100%; border-radius: 9px; }
+.login-school-photo-caption .school-option-avatar img { width: 100%; height: 100%; object-fit: contain; }
+.login-school-photo-caption>div { display: grid; gap: 3px; min-width: 0; }
+.login-school-photo-caption small { color: #6f827b; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.login-school-photo-caption strong { overflow: hidden; color: #1d463a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.login-school-caldas .login-card { border-color: #dce9e3; }
+.login-school-caldas .login-submit { background: var(--institution-accent); }
+.login-school-caldas .login-submit:hover { filter: brightness(.94); }
+@media (max-width: 760px) {
+  .login-school-photo { height: 140px; margin-top: 12px; border-radius: 14px; }
+  .login-school-photo-caption { right: 8px; bottom: 8px; left: 8px; padding: 7px 9px; }
+  .login-school-photo-caption>span { flex-basis: 30px; width: 30px; height: 30px; }
+  .login-school-photo-caption strong { font-size: 10px; }
+}
+.school-home-contact-actions{display:flex;align-items:center;justify-content:flex-end;gap:14px;flex:none}
+.school-home-contact-actions>button{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:#fff;font:650 11px 'DM Sans',sans-serif;cursor:pointer;white-space:nowrap}
+.school-home-contact-actions>button:hover{text-decoration:underline;text-underline-offset:3px}
+@media(max-width:760px){.school-home-contact-actions{gap:9px}.school-home-contact-actions>button{font-size:9px}.school-home-contact-actions>button svg{width:12px;height:12px}}
