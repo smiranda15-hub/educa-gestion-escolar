@@ -1271,3 +1271,24 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
   .dashboard-overview .quick-grid strong{font-size:12px}
   .dashboard-overview .footer{align-items:flex-start;gap:8px;font-size:11px}
 }
+
+
+/* Contenido institucional: biblioteca de publicaciones por colegio */
+.institutional-content-page{min-width:0}
+.institutional-content-editor{display:grid;gap:16px;margin:20px 0;padding:22px}
+.institutional-content-editor>.form-row{display:grid;grid-template-columns:minmax(180px,.7fr) minmax(260px,1.3fr);gap:14px}
+.institutional-content-editor label{display:grid;gap:7px;color:#25445e;font-size:13px;font-weight:650}
+.institutional-content-editor input,.institutional-content-editor select,.institutional-content-editor textarea{width:100%;min-width:0;border:1px solid #d5e0e8;border-radius:10px;background:#fff;padding:11px 13px;color:#1c354b;font:inherit;font-weight:400}
+.institutional-content-editor textarea{resize:vertical;line-height:1.6}
+.institutional-content-editor .checkbox-label{display:flex;align-items:center;gap:9px}
+.institutional-content-editor .checkbox-label input{width:17px;height:17px}
+.institutional-content-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:18px}
+.institutional-content-card{overflow:hidden;min-width:0;padding:0}
+.institutional-content-card-body{display:grid;gap:10px;padding:20px}
+.institutional-content-card-body h2{margin:0;color:#19354c;font-size:19px;line-height:1.35}
+.institutional-content-card-body p{margin:0;color:#5d7185;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.institutional-content-image{display:block;width:100%;max-height:270px;object-fit:cover}
+.institutional-video{position:relative;aspect-ratio:16/9;background:#102a40}
+.institutional-video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.institutional-content-card .dialog-actions{justify-content:flex-start;margin-top:5px}
+@media(max-width:760px){.institutional-content-editor{padding:16px}.institutional-content-editor>.form-row,.institutional-content-grid{grid-template-columns:1fr}.institutional-content-card-body{padding:16px}.institutional-content-card-body h2{font-size:17px}}

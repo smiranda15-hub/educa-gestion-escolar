@@ -151,6 +151,8 @@ export async function migrate() {
       document TEXT NOT NULL,
       document_type TEXT NOT NULL DEFAULT '',
       document_issued_place TEXT NOT NULL DEFAULT '',
+      sex TEXT NOT NULL DEFAULT '',
+      date_of_birth TEXT NOT NULL DEFAULT '',
       grade TEXT NOT NULL,
       guardian_name TEXT NOT NULL,
       guardian_phone TEXT NOT NULL DEFAULT '',
@@ -485,6 +487,19 @@ export async function migrate() {
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
     CREATE INDEX IF NOT EXISTS communications_school_created_idx ON communications(school_id, created_at);
+    CREATE TABLE IF NOT EXISTS institutional_content (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      category TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      media_url TEXT NOT NULL DEFAULT '',
+      is_published INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS institutional_content_school_idx ON institutional_content(school_id, is_published, category, updated_at);
     CREATE TABLE IF NOT EXISTS communication_recipients (
       communication_id TEXT NOT NULL REFERENCES communications(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -699,7 +714,7 @@ export async function migrate() {
     for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BYTEA']]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
-    for (const [column, definition] of [['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"]]) {
+    for (const [column, definition] of [['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"], ['sex', "TEXT NOT NULL DEFAULT ''"], ['date_of_birth', "TEXT NOT NULL DEFAULT ''"]]) {
       if (!await db.get("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'students' AND column_name = ?", column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     for (const [column, definition] of [['verification_code', 'TEXT'], ['signature_snapshot', "TEXT NOT NULL DEFAULT '[]'"], ['status', "TEXT NOT NULL DEFAULT 'Emitida'"], ['rector_user_id', 'TEXT REFERENCES users(id)'], ['rector_name', "TEXT NOT NULL DEFAULT ''"], ['signed_at', 'TEXT'], ['replaced_by_id', 'TEXT REFERENCES school_certificates(id) ON DELETE SET NULL'], ['annul_note', "TEXT NOT NULL DEFAULT ''"], ['annulled_by', 'TEXT REFERENCES users(id)'], ['annulled_at', 'TEXT']]) {
@@ -748,7 +763,7 @@ export async function migrate() {
       if (!studentAccessColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     const studentColumns = await db.all('PRAGMA table_info(students)')
-    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB'], ['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"]]) {
+    for (const [column, definition] of [['card_code', 'TEXT'], ['photo_content_type', 'TEXT'], ['photo_file_name', 'TEXT'], ['photo_data', 'BLOB'], ['document_type', "TEXT NOT NULL DEFAULT ''"], ['document_issued_place', "TEXT NOT NULL DEFAULT ''"], ['sex', "TEXT NOT NULL DEFAULT ''"], ['date_of_birth', "TEXT NOT NULL DEFAULT ''"]]) {
       if (!studentColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE students ADD COLUMN ${column} ${definition}`)
     }
     const certificateColumns = await db.all('PRAGMA table_info(school_certificates)')
