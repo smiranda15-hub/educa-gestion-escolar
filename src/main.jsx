@@ -1500,12 +1500,17 @@ function App() {
     const accessPath = schoolForLogin
       ? `/colegio/${encodeURIComponent(institutionPublicSlug(schoolForLogin))}/acceso`
       : '/#acceso'
+    if (confirmed) {
+      // Inicia una instancia limpia de la app; evita dejar el panel anterior renderizado.
+      window.location.replace(accessPath)
+      return
+    }
     window.history.replaceState(null, '', accessPath)
     setAuthenticated(false); setTermsAccepted(false); setTermsLoading(false); setTermsError(''); setUser(null); setStudents([]); setDashboardData(null)
     setSchoolUsers([]); setPortalStudents([]); setPortalAssignments([]); setReportCardData(null)
     setAttendanceRows([]); setGradeRows([]); setAssessmentSubmissions([]); setUnreadNotifications(0); setQuery(''); setMenuOpen(false); setActive('Resumen')
     setLoginSchool(schoolForLogin?.slug || ''); setBrandSettings(schoolForLogin ? schoolOption(schoolForLogin) : null); setLoginStep(schoolForLogin ? 'login' : 'select')
-    setLoginNotice(confirmed ? '' : 'No se pudo confirmar el cierre en el servidor. Comprueba tu conexión.')
+    setLoginNotice('No se pudo confirmar el cierre en el servidor. Comprueba tu conexión.')
   }
   const acceptTerms = async () => {
     setTermsBusy(true); setTermsError('')
@@ -1636,7 +1641,7 @@ function App() {
       setSetupRequired(setupResult.setupRequired)
       setSchools((schoolResult.schools || []).map(schoolOption))
       setBrandSettings(schoolOption(schoolResult.schools?.find(school => school.slug === loginSchool) || schoolResult.schools?.[0] || { name: 'educa', slug: '' }))
-      if (session.ok) { const data = await session.json(); setTermsLoading(true); setUser(data.user); setAuthenticated(true); setActive(['acudiente', 'estudiante'].includes(data.user.role) ? 'Mi aula' : 'Resumen') }
+      if (session.ok) { const data = await session.json(); if (data.user) { setTermsLoading(true); setUser(data.user); setAuthenticated(true); setActive(['acudiente', 'estudiante'].includes(data.user.role) ? 'Mi aula' : 'Resumen') } }
     }).catch(() => { if (mounted) setApiReady(false) }).finally(() => { if (mounted) setLoadingAuth(false) })
     return () => { mounted = false }
   }, [])

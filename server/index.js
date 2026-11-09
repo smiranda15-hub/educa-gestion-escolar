@@ -697,7 +697,7 @@ async function route(request, response) {
   }
   if (method === 'GET' && url.pathname === '/api/auth/me') {
     const user = await getSession(request)
-    return user ? json(response, 200, { user: safeUser(user) }) : json(response, 401, { error: 'Sesión no válida.' }, { 'Set-Cookie': sessionCookie('', 0) })
+    return user ? json(response, 200, { user: safeUser(user) }) : json(response, 200, { user: null }, { 'Set-Cookie': sessionCookie('', 0) })
   }
   if (method === 'GET' && url.pathname === '/api/legal/provider') {
     return json(response, 200, { provider: {
