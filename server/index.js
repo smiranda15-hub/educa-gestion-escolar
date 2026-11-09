@@ -3427,7 +3427,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { student: await db.get('SELECT id, full_name AS name, document, document_type AS "documentType", document_issued_place AS "documentIssuedPlace", grade, guardian_name AS guardian, guardian_phone AS phone, status, created_at AS "createdAt" FROM students WHERE id = ? AND school_id = ?', id, user.school_id) })
   }
   if (studentMatch && method === 'DELETE') {
-    if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden eliminar estudiantes.' })
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría o secretaría autorizada pueden eliminar estudiantes.' })
     const id = studentMatch[1]
     const existing = await db.get('SELECT id FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
     if (!existing) return json(response, 404, { error: 'No encontramos ese estudiante en este colegio.' })

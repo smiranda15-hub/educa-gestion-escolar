@@ -599,3 +599,98 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .messaging-compose-dialog form{display:grid;gap:14px}
 @media(max-width:760px){.messaging-layout{grid-template-columns:1fr;min-height:680px}.messaging-sidebar{max-height:330px;border-right:0;border-bottom:1px solid #e8edf3}.messaging-conversation{min-height:430px}.messaging-message-list{min-height:220px;padding:14px}.messaging-bubble{max-width:92%}}
 @media(max-width:480px){.messaging-page .students-title{align-items:flex-start}.messaging-page .students-title>.students-actions{width:auto}.messaging-page .students-title .button{min-height:38px;padding:0 10px;font-size:11px}.messaging-folders{padding:10px}.messaging-thread-item{padding:11px 10px}.messaging-conversation-heading{padding:12px}.messaging-reply-form{padding:12px}.messaging-bubble p{font-size:12px}}
+
+/* Portada pública de EDUCA: presentación de la plataforma, independiente de las páginas de cada colegio. */
+.educa-marketing-home{
+  --edu-primary:#176b63;
+  --edu-primary-deep:#124f4c;
+  --edu-accent:#d9a94f;
+  background:#f5f8f7;
+  color:#19384d;
+}
+.educa-marketing-home .institution-entry-top{
+  position:sticky;top:0;z-index:20;height:78px;
+  border-bottom:1px solid #dce7e5;
+  box-shadow:0 5px 22px rgba(22,56,72,.06);
+}
+.educa-marketing-home .institution-entry-top::before{
+  position:absolute;inset:0 0 auto;height:4px;content:"";
+  background:linear-gradient(90deg,#176b63 0%,#45a080 62%,#e2b458 100%);
+}
+.educa-marketing-home .institution-entry-brand{color:#17394d}
+.educa-marketing-home .institution-entry-brand strong{font-size:22px}
+.educa-marketing-home .institution-entry-brand strong span{color:#208879}
+.educa-marketing-home .institution-marketing-nav>a:not(.institution-nav-access){color:#425f70;font-weight:700}
+.educa-marketing-home .institution-marketing-nav>a:not(.institution-nav-access):hover{color:#176b63}
+.educa-marketing-home .institution-nav-access{background:#176b63;color:white;box-shadow:0 8px 20px rgba(23,107,99,.18)}
+.educa-marketing-home .institution-nav-access:hover{background:#124f4c;color:white}
+.educa-marketing-home .institution-marketing-main{width:min(100% - 48px,1240px)}
+.educa-marketing-home .institution-marketing-hero{
+  position:relative;isolation:isolate;overflow:hidden;
+  margin:28px 0 0;padding:clamp(38px,5vw,68px);
+  border:1px solid #d9e7e5;border-radius:28px;
+  background:linear-gradient(118deg,#edf6f3 0%,#f7faf8 48%,#f0f2fb 100%);
+}
+.educa-marketing-home .institution-marketing-hero::before{
+  position:absolute;z-index:-1;right:-110px;top:-190px;width:410px;height:410px;
+  border:1px solid rgba(23,107,99,.11);border-radius:50%;content:"";
+  box-shadow:0 0 0 48px rgba(23,107,99,.025),0 0 0 96px rgba(23,107,99,.02);
+}
+.educa-marketing-home .institution-entry-eyebrow{color:#39766f}
+.educa-marketing-home .institution-marketing-copy h1{color:#17394d;max-width:650px}
+.educa-marketing-home .institution-marketing-copy h1 span{color:#167b70}
+.educa-marketing-home .institution-marketing-copy>p{color:#536e7d}
+.educa-marketing-home .institution-marketing-secondary{color:#315d6a}
+.educa-marketing-home .institution-marketing-assurance{color:#597183}
+.educa-marketing-home .institution-marketing-assurance svg{color:#218a71}
+.educa-marketing-home .institution-product-visual{
+  min-height:410px;border-color:#d7e5e4;
+  background:radial-gradient(ellipse at 50% 54%,#d7eee8 0,transparent 54%),linear-gradient(145deg,#e6f2ef,#eef0fa);
+}
+.educa-marketing-home .institution-product-brandmark{background:#176b63}
+.educa-marketing-home .institution-product-dashboard>small{color:#176b63}
+.educa-marketing-home .institution-product-chart>div{background:linear-gradient(180deg,#3aa88e,#9fd9c4)}
+.educa-marketing-home .institution-product-float-a>svg,.educa-marketing-home .institution-product-float-b>svg{color:#176b63}
+.educa-marketing-home .institution-marketing-benefits{padding-top:70px}
+.educa-marketing-home .institution-marketing-section-heading h2{color:#17394d}
+.educa-marketing-home .institution-marketing-feature-grid article{
+  position:relative;overflow:hidden;border-color:#dce8e7;
+  box-shadow:0 8px 24px rgba(23,56,77,.045);
+}
+.educa-marketing-home .institution-marketing-feature-grid article::before{
+  position:absolute;inset:0 0 auto;height:3px;content:"";
+  background:linear-gradient(90deg,#176b63,#59b391);
+}
+.educa-marketing-home .institution-marketing-feature-grid article>span{background:#e8f4f0;color:#176b63}
+.educa-marketing-home .institution-marketing-feature-grid h3{color:#17394d}
+.educa-marketing-home .institution-marketing-feature-grid p{color:#5c7180}
+.educa-marketing-home .institution-marketing-feature-grid article>small{color:#39766f}
+.educa-marketing-home .institution-marketing-platform-note{border-color:#d5e5e2;background:linear-gradient(100deg,#e6f3ef,#eef1fa)}
+.educa-marketing-home .institution-marketing-platform-note>span{color:#176b63}
+.educa-marketing-home .institution-marketing-platform-note>a{color:#176b63}
+.educa-marketing-home .institution-access-section{scroll-margin-top:92px;border-color:#d7e5e4}
+.educa-marketing-home .institution-access-heading h2{color:#17394d}
+.educa-marketing-home .institution-chooser-card{border-color:#dce7e7}
+.educa-marketing-home .institution-chooser-card-action{color:#176b63}
+.educa-marketing-home .institution-chooser-security svg{color:#218a71}
+.educa-marketing-home .institution-community-grid article{border-color:#dce8e7;background:#fff}
+.educa-marketing-home .institution-community-grid article>span{background:#e8f4f0;color:#176b63}
+.educa-marketing-home .institution-community-assurance{border-color:#d8e7e4;background:#edf6f2}
+.educa-marketing-home .institution-community-assurance>a{color:#176b63}
+.educa-marketing-home .institution-entry-footer{border-top-color:#d8e4e3;background:#17394d;color:#dce9ed}
+.educa-marketing-home .institution-entry-footer a{color:#c8e6df}
+@media(max-width:850px){
+  .educa-marketing-home .institution-entry-top{height:70px}
+  .educa-marketing-home .institution-marketing-hero{margin-top:18px;padding:34px;border-radius:22px}
+  .educa-marketing-home .institution-product-visual{min-height:350px}
+}
+@media(max-width:560px){
+  .educa-marketing-home .institution-entry-top{height:62px}
+  .educa-marketing-home .institution-marketing-main{width:calc(100% - 28px)}
+  .educa-marketing-home .institution-marketing-hero{margin-top:12px;padding:24px 18px 20px;border-radius:18px}
+  .educa-marketing-home .institution-marketing-hero::before{right:-220px;top:-230px}
+  .educa-marketing-home .institution-marketing-benefits{padding-top:38px}
+  .educa-marketing-home .institution-product-visual{min-height:275px}
+  .educa-marketing-home .institution-community-grid article{padding:16px}
+  .educa-marketing-home .institution-entry-footer{padding:18px;}
+}
