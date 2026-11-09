@@ -50,6 +50,16 @@ const navRoleAccess = {
   'Actividades y eventos': ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente', 'acudiente', 'estudiante'],
 }
 const canSeeNavItem = (item, role) => !navRoleAccess[item.label] || navRoleAccess[item.label].includes(role)
+const moduleFromLocationHash = () => {
+  const match = window.location.hash.match(/^#modulo\/(.+)$/)
+  if (!match) return ''
+  try { return decodeURIComponent(match[1]) } catch { return '' }
+}
+const moduleForUserOrDefault = (role, fallback) => {
+  const requested = moduleFromLocationHash()
+  const item = navGroups.flatMap(group => group.items).find(navItem => navItem.label === requested)
+  return item && canSeeNavItem(item, role) ? requested : fallback
+}
 const notificationModuleByCategory = {
   password_reset: 'Solicitudes de contraseña', attendance: 'Justificaciones', calendar: 'Calendario',
   communication: 'Comunicaciones', message: 'Mensajería', certificate: 'Certificados y constancias',
@@ -1197,9 +1207,7 @@ function App() {
   const [loginError, setLoginError] = useState('')
   const [loginNotice, setLoginNotice] = useState('')
   const [active, setActive] = useState(() => {
-    const match = window.location.hash.match(/^#modulo\/(.+)$/)
-    if (!match) return 'Resumen'
-    try { return decodeURIComponent(match[1]) || 'Resumen' } catch { return 'Resumen' }
+    return moduleFromLocationHash() || 'Resumen'
   })
   const [notificationFocus, setNotificationFocus] = useState(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -1607,7 +1615,7 @@ function App() {
       setLoginSchool(result.user.school.slug)
       setBrandSettings(schoolOption({ ...result.user.school, hasLogo: result.user.school.hasLogo }))
       setAuthenticated(true)
-      setActive(['acudiente', 'estudiante'].includes(result.user.role) ? 'Mi aula' : 'Resumen')
+      setActive(moduleForUserOrDefault(result.user.role, ['acudiente', 'estudiante'].includes(result.user.role) ? 'Mi aula' : 'Resumen'))
       setLoginNotice('')
     } catch { setLoginError('No se pudo conectar con el servidor. Comprueba que esté en ejecución.') }
   }
@@ -1701,7 +1709,7 @@ function App() {
       setSetupRequired(setupResult.setupRequired)
       setSchools((schoolResult.schools || []).map(schoolOption))
       setBrandSettings(schoolOption(schoolResult.schools?.find(school => school.slug === loginSchool) || schoolResult.schools?.[0] || { name: 'educa', slug: '' }))
-      if (session.ok) { const data = await session.json(); if (data.user) { setTermsLoading(true); setUser(data.user); setAuthenticated(true); setActive(['acudiente', 'estudiante'].includes(data.user.role) ? 'Mi aula' : 'Resumen') } }
+      if (session.ok) { const data = await session.json(); if (data.user) { setTermsLoading(true); setUser(data.user); setAuthenticated(true); setActive(moduleForUserOrDefault(data.user.role, ['acudiente', 'estudiante'].includes(data.user.role) ? 'Mi aula' : 'Resumen')) } }
     }).catch(() => { if (mounted) setApiReady(false) }).finally(() => { if (mounted) setLoadingAuth(false) })
     return () => { mounted = false }
   }, [])
