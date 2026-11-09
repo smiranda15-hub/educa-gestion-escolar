@@ -933,3 +933,32 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
   .assessment-form-grid .online-options-grid { grid-template-columns: minmax(0, 1fr); }
   .online-exam-dialog { width: min(100%, calc(100vw - 18px)); max-height: 94dvh; }
 }
+
+/* Aula y documentos: ajustes de lectura y estructura para cuentas del portal. */
+.portal-classroom-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:18px 0 12px;padding:14px 16px;border:1px solid #dfe7ef;border-radius:14px;background:#fff;box-shadow:var(--shadow-card)}
+.portal-student-summary{display:grid;grid-template-columns:1fr;gap:3px;min-width:0;margin:0;padding:0;border:0;background:transparent;box-shadow:none}
+.portal-student-summary>span{color:#738096;font-size:10px;font-weight:750;letter-spacing:.09em}
+.portal-student-summary>strong{overflow-wrap:anywhere;color:#203b53;font-size:14px}
+.portal-student-summary>small{color:#64758a;font-size:12px}
+.portal-classroom-toolbar .work-student-picker{margin:0;min-width:min(100%,330px)}
+.portal-classroom-toolbar>.button{flex:none}
+.portal-work-page>.students-empty{min-height:170px;margin-top:14px;border:1px dashed #d4e0e9;background:linear-gradient(135deg,#fff 0%,#f9fbfd 100%)}
+.portal-work-page>.students-empty .empty-icon{background:#eaf4f5;color:#2b7581}
+.justifications-page .student-table-wrap{overflow-x:auto}
+.justifications-page .justification-table{width:100%;min-width:900px;table-layout:fixed}
+.justifications-page .justification-table th:nth-child(1){width:21%}
+.justifications-page .justification-table th:nth-child(2){width:13%}
+.justifications-page .justification-table th:nth-child(3){width:36%}
+.justifications-page .justification-table th:nth-child(4){width:13%}
+.justifications-page .justification-table th:nth-child(5){width:17%}
+.justifications-page .justification-table td{height:auto;min-height:64px;padding-top:13px;padding-bottom:13px;vertical-align:top;white-space:normal;line-height:1.5;overflow-wrap:anywhere}
+.justifications-page .justification-table td:first-child{display:table-cell;color:#33445c}
+.justifications-page .justification-table td:first-child strong,.justifications-page .justification-table td:first-child small{display:block}
+.justification-reason-cell{display:grid;justify-items:start;gap:8px;min-width:0;color:#33445c}
+.justification-attachment{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;white-space:normal;text-align:left}
+.justification-attachment>span{min-width:0;overflow-wrap:anywhere}
+.justifications-page .justification-table .history-secondary{white-space:normal;line-height:1.45}
+.report-card-page .report-card-filters{align-items:end}
+.report-card-page .report-card-filters .student-filter{min-width:150px}
+.report-card-page .report-card-document{font-size:14px;line-height:1.5}
+@media(max-width:760px){.portal-classroom-toolbar{align-items:stretch;flex-direction:column}.portal-classroom-toolbar>.button{width:100%;justify-content:center}.portal-classroom-toolbar .work-student-picker{max-width:none}.justifications-page .justification-table{min-width:900px}}

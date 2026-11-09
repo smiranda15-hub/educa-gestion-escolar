@@ -2788,7 +2788,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   }
 
   if (url.pathname === '/api/grades/report-card/options' && method === 'GET') {
-    const permitted = ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente']
+    const permitted = ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante']
     if (!permitted.includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
     let students
     if (['acudiente', 'estudiante'].includes(user.role)) {
@@ -2867,7 +2867,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt, notified, emailNotified, emailConfigured })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
-    if (!['admin', 'rectoria', 'secretaria', 'docente', 'acudiente'].includes(user.role)) return json(response, 403, { error: 'Las cuentas de estudiante no tienen acceso a boletines.' })
+    if (!['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
     const studentId = String(url.searchParams.get('studentId') || '')
     const academicYear = String(url.searchParams.get('academicYear') || '')
     const period = String(url.searchParams.get('period') || '')
