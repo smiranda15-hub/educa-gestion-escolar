@@ -1492,6 +1492,8 @@ function App() {
       confirmed = response.ok
     } catch { /* Se cierra la vista local aunque el servidor no responda. */ }
     pushTokenRef.current = ''
+    // La ruta de módulo pertenece a la sesión autenticada; no debe quedar en el enlace de acceso.
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
     setAuthenticated(false); setTermsAccepted(false); setTermsLoading(false); setTermsError(''); setUser(null); setStudents([]); setDashboardData(null)
     setSchoolUsers([]); setPortalStudents([]); setPortalAssignments([]); setReportCardData(null)
     setAttendanceRows([]); setGradeRows([]); setAssessmentSubmissions([]); setUnreadNotifications(0); setQuery(''); setMenuOpen(false); setActive('Resumen')
