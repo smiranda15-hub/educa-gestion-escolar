@@ -6,7 +6,7 @@ import 'bootstrap/dist/css/bootstrap.min.css'
 import { QRCodeSVG } from 'qrcode.react'
 import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BookOpen, Building2, CreditCard,
-  CalendarDays, Check, ChevronDown, ChevronRight, ClipboardCheck,
+  CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck,
   Award, CalendarPlus, Clock3, Download, Eye, EyeOff, FileText, GraduationCap, History, IdCard, LayoutDashboard, LockKeyhole, LogOut, Menu,
   PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X, Mail, MapPin, Phone, Send, Inbox, Reply, Play,
 } from 'lucide-react'
