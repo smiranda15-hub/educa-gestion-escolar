@@ -694,3 +694,119 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .educa-marketing-home .institution-community-grid article{padding:16px}
   .educa-marketing-home .institution-entry-footer{padding:18px;}
 }
+
+/* Experiencia móvil transversal: controles cómodos, páginas fluidas y sin scroll lateral. */
+@media (max-width: 850px) {
+  html, body, #root { max-width: 100%; overflow-x: clip; }
+  .app-shell, .main-area, .content-wrap, .students-page { min-width: 0; }
+  .content-wrap { width: 100%; }
+  .sidebar { overscroll-behavior: contain; }
+  .topbar, .top-actions { min-width: 0; }
+  .panel, .stat-card, .course-card, .communication-card, .assignment-card,
+  .school-settings-card, .certificate-panel, .institutional-portal-card { min-width: 0; }
+  .student-table-wrap, .audit-table-wrap, .history-table-wrap,
+  .report-card-grid-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .student-table, .attendance-table, .enrollment-table, .payment-table,
+  .grade-table, .justification-table { min-width: 680px; }
+  .table-row-actions, .students-actions, .activity-actions, .communication-actions,
+  .course-assignment-actions, .profile-actions, .report-actions { flex-wrap: wrap; }
+  .table-row-actions > *, .students-actions > *, .activity-actions > *,
+  .communication-actions > *, .report-actions > * { max-width: 100%; }
+  .report-card-document, .certificate-paper, .digital-card { max-width: 100%; }
+  .report-card-document, .certificate-paper { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 680px) {
+  /* Reachable touch targets and prevent iOS zoom on focused inputs. */
+  .button, .icon-btn, .nav-item, .mobile-menu, .profile-mini,
+  .school-switch, .sidebar-search button, .top-actions button,
+  .dialog-actions button, .logout-button { min-height: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]),
+  select, textarea { font-size: 16px !important; }
+  input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; }
+  button, a, select, summary { -webkit-tap-highlight-color: transparent; }
+  .content-wrap { padding-left: max(14px, var(--edu-safe-left, 0px)); padding-right: max(14px, var(--edu-safe-right, 0px)); }
+
+  /* Stack dense toolbars instead of shrinking labels and fields. */
+  .students-title, .welcome-row { min-width: 0; }
+  .students-title .students-actions, .welcome-actions,
+  .attendance-toolbar, .grades-toolbar, .period-toolbar,
+  .students-toolbar, .report-filters, .report-card-filters,
+  .audit-filters, .enrollment-toolbar, .portal-classroom-toolbar,
+  .portal-assignment-filters, .communication-actions, .activity-actions,
+  .profile-actions, .report-actions { max-width: 100%; flex-wrap: wrap; row-gap: 9px; }
+  .students-toolbar, .attendance-toolbar, .grades-toolbar,
+  .report-filters, .report-card-filters, .audit-filters,
+  .enrollment-toolbar, .portal-classroom-toolbar, .portal-assignment-filters { align-items: stretch; }
+  .student-filter, .student-filter label, .student-filter input,
+  .student-filter select, .students-toolbar input, .students-toolbar select,
+  .report-filters input, .report-filters select, .audit-filters input,
+  .audit-filters select, .enrollment-toolbar input, .enrollment-toolbar select,
+  .grades-toolbar input, .grades-toolbar select, .period-toolbar input,
+  .period-toolbar select { min-width: 0; max-width: 100%; }
+  .student-filter select, .students-toolbar select, .report-filters select,
+  .audit-filters select, .enrollment-toolbar select { min-height: 44px; }
+
+  /* Forms keep one readable column; long text and URLs wrap safely. */
+  .form-row, .assessment-form-grid, .institution-create-form,
+  .institution-form-section, .institution-manager-grid, .online-options-grid,
+  .online-exam-form, .payment-create-form, .grade-rule-form,
+  .period-form, .profile-form, .justification-form, .recovery-form,
+  .calendar-form, .calendar-form-wide, .certificate-form,
+  .school-settings-form, .staff-profile-form { grid-template-columns: minmax(0, 1fr) !important; }
+  .form-row > *, .assessment-form-grid > *, .certificate-form > *,
+  .staff-profile-form > *, .school-settings-form > * { min-width: 0; max-width: 100%; }
+  textarea { min-height: 104px; }
+  .field-hint, .students-scope, .form-scope, .login-message,
+  .panel p, .institutional-portal-details strong { overflow-wrap: anywhere; }
+
+  /* Dialogs fit the usable viewport; action buttons remain reachable. */
+  .dialog-backdrop, .legal-backdrop {
+    place-items: end center;
+    padding: max(8px, var(--edu-safe-top, 0px)) max(8px, var(--edu-safe-right, 0px))
+      max(8px, var(--edu-safe-bottom, 0px)) max(8px, var(--edu-safe-left, 0px));
+  }
+  .student-dialog, .course-history-dialog, .assessment-dialog,
+  .online-exam-dialog, .messaging-compose-dialog, .legal-accept-dialog {
+    width: 100%; max-width: 100%;
+    max-height: calc(100dvh - var(--edu-safe-top, 0px) - var(--edu-safe-bottom, 0px) - 16px);
+    margin: 0; border-radius: 18px 18px 12px 12px; overscroll-behavior: contain;
+  }
+  .dialog-actions {
+    position: sticky; bottom: calc(-1 * var(--edu-safe-bottom, 0px));
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 12px 0 max(8px, var(--edu-safe-bottom, 0px)); background: #fff;
+  }
+  .dialog-actions > button { flex: 1 1 130px; }
+  .toast { left: max(12px, var(--edu-safe-left, 0px)); right: max(12px, var(--edu-safe-right, 0px)); width: auto; }
+
+  /* Tables scroll inside their card without widening the whole page. */
+  .student-table-wrap, .audit-table-wrap, .history-table-wrap,
+  .report-card-grid-wrap { border-radius: 11px; }
+  .student-table td, .attendance-table td, .enrollment-table td,
+  .payment-table td, .grade-table td { white-space: nowrap; }
+  .report-card-document { padding: 18px 13px; }
+  .report-card-header { flex-wrap: wrap; gap: 10px; }
+  .report-card-period { flex: 1 1 120px; min-width: 0; }
+  .report-card-student-grid { grid-template-columns: minmax(0, 1fr); }
+  .report-card-grade-grid { min-width: 680px; }
+  .report-card-document:has(.report-card-grade-grid) { overflow-x: auto; }
+
+  .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .activity-grid, .course-grid, .institution-community-grid { grid-template-columns: minmax(0, 1fr); }
+  .calendar-grid { min-width: 0; }
+  .messaging-layout { min-height: 0; }
+  .messaging-sidebar { max-height: min(36dvh, 300px); }
+  .messaging-conversation { min-height: min(58dvh, 520px); }
+  .messaging-message-list { min-height: 180px; }
+}
+
+@media (max-width: 390px) {
+  .content-wrap { padding-left: max(11px, var(--edu-safe-left, 0px)); padding-right: max(11px, var(--edu-safe-right, 0px)); }
+  .stats-grid, .quick-grid { grid-template-columns: minmax(0, 1fr); }
+  .welcome-actions .button, .students-actions .button { flex-basis: 100%; }
+  .topbar { gap: 4px; }
+  .mobile-menu { margin-right: 3px; }
+  .top-actions { gap: 2px; }
+  .panel { padding: 13px; }
+}
