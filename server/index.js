@@ -3429,14 +3429,17 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   if (studentMatch && method === 'DELETE') {
     if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría o secretaría autorizada pueden eliminar estudiantes.' })
     const id = studentMatch[1]
-    const existing = await db.get('SELECT id FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
+    const existing = await db.get('SELECT id, status FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
     if (!existing) return json(response, 404, { error: 'No encontramos ese estudiante en este colegio.' })
+    if (existing.status === 'Retirado') return json(response, 200, { retired: true, alreadyRetired: true })
     await db.transaction(async tx => {
-      await tx.run('DELETE FROM user_students WHERE student_id = ?', id)
-      await tx.run('DELETE FROM students WHERE id = ? AND school_id = ?', id, user.school_id)
+      // Conserva matrículas, pagos, notas, asistencias y documentos vinculados al estudiante.
+      await tx.run("UPDATE students SET status = 'Retirado', access_status = 'Suspendido', access_suspension_reason = ?, access_suspended_at = ?, access_suspended_by = ? WHERE id = ? AND school_id = ?", 'Registro retirado por la institución.', new Date().toISOString(), user.id, id, user.school_id)
+      await tx.run("UPDATE student_enrollments SET status = 'Retirada', end_date = COALESCE(end_date, ?) WHERE student_id = ? AND school_id = ? AND status = 'Activa'", new Date().toISOString().slice(0, 10), id, user.school_id)
+      await tx.run("DELETE FROM sessions WHERE user_id IN (SELECT us.user_id FROM user_students us WHERE us.student_id = ? AND us.relationship = 'estudiante')", id)
     })
-    await logAudit(user.school_id, user.id, 'student_deleted')
-    return json(response, 200, { deleted: true })
+    await logAudit(user.school_id, user.id, 'student_retired')
+    return json(response, 200, { retired: true })
   }
   const studentAccessMatch = url.pathname.match(/^\/api\/students\/([0-9a-f-]{36})\/access$/i)
   if (studentAccessMatch && method === 'PATCH') {

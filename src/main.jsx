@@ -106,7 +106,7 @@ const auditActionName = action => ({
   work_submitted: 'Entrega de trabajo', work_submission_deleted: 'Eliminación de entregas', enrollment_request_created: 'Solicitud de matrícula creada',
   enrollment_request_updated: 'Actualización de solicitud de matrícula', enrollment_approved: 'Matrícula aprobada',
   student_transferred: 'Traslado de estudiante', student_created: 'Creación de estudiante', student_updated: 'Actualización de estudiante',
-  student_deleted: 'Eliminación de estudiante', student_access_suspended: 'Suspensión de acceso estudiantil', student_access_reactivated: 'Reactivación de acceso estudiantil', student_payment_created: 'Registro de cobro estudiantil', student_payment_updated: 'Actualización de pago estudiantil',
+  student_deleted: 'Eliminación de estudiante', student_retired: 'Retiro de estudiante con historial conservado', student_access_suspended: 'Suspensión de acceso estudiantil', student_access_reactivated: 'Reactivación de acceso estudiantil', student_payment_created: 'Registro de cobro estudiantil', student_payment_updated: 'Actualización de pago estudiantil',
 }[String(action || '').split(':')[0]] || String(action || '').split(':')[0].replaceAll('_', ' '))
 const auditDateLabel = value => {
   const raw = String(value || '')
@@ -900,7 +900,7 @@ function StudentDirectoryModule({ user, students, studentsError, statusFilter, s
     <div className="students-scope"><ShieldCheck size={14}/> {user?.role === 'docente' ? 'Solo se muestran estudiantes activos de tus cursos asignados. Los docentes pueden consultar, pero no crear, editar ni eliminar estudiantes.' : canManage ? 'Administración, Rectoría y Secretaría autorizada pueden crear, editar y eliminar estudiantes. Al aprobar una matrícula, el estudiante queda activo en el grado solicitado.' : 'Los registros se guardan en la base del colegio y solo el personal autorizado debe acceder.'}</div>
     {studentsError && <div className="login-message login-error" role="alert">{studentsError}</div>}
     <div className="students-toolbar"><div className="student-count"><strong>{students.length}</strong> {students.length === 1 ? 'estudiante registrado' : 'estudiantes registrados'}</div>{canSeeSensitive && <label className="student-filter">Estado <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option>Todos</option><option>Activo</option><option>Retirado</option></select></label>}</div>
-    <div className="student-table-wrap"><table className="student-table"><thead><tr><th>ESTUDIANTE</th>{canSeeSensitive && <><th>DOCUMENTO</th><th>ACUDIENTE</th><th>TELÉFONO</th></>}<th>GRADO / CURSO</th><th>ESTADO</th>{canSeeSensitive && <th>ACCIONES</th>}</tr></thead><tbody>{students.map(student => <tr key={student.id}><td><span className="student-initials">{student.name.split(/\s+/).slice(0,2).map(part => part[0]).join('').toUpperCase()}</span><strong>{student.name}</strong></td>{canSeeSensitive && <><td><strong>{student.documentType || 'Tipo pendiente'}</strong><small className="history-secondary">{student.document}</small><small className="history-secondary">Expedido en {student.documentIssuedPlace || 'pendiente'}</small></td><td>{student.guardian}</td><td>{student.phone || '—'}</td></>}<td>{student.grade}</td><td><span className={`student-status ${student.status === 'Activo' ? 'status-active' : 'status-inactive'}`}>{student.status}</span></td>{canSeeSensitive && <td><div className="table-row-actions">{canManage && <button className="account-toggle" onClick={() => { setEditingStudent(student); setStudentDialog(true) }}><Pencil size={14}/> Editar</button>}{canManage && <button className="account-toggle delete-student-action" onClick={() => deleteStudent(student)}><Trash2 size={14}/> Eliminar</button>}</div></td>}</tr>)}</tbody></table>
+    <div className="student-table-wrap"><table className="student-table"><thead><tr><th>ESTUDIANTE</th>{canSeeSensitive && <><th>DOCUMENTO</th><th>ACUDIENTE</th><th>TELÉFONO</th></>}<th>GRADO / CURSO</th><th>ESTADO</th>{canSeeSensitive && <th>ACCIONES</th>}</tr></thead><tbody>{students.map(student => <tr key={student.id}><td><span className="student-initials">{student.name.split(/\s+/).slice(0,2).map(part => part[0]).join('').toUpperCase()}</span><strong>{student.name}</strong></td>{canSeeSensitive && <><td><strong>{student.documentType || 'Tipo pendiente'}</strong><small className="history-secondary">{student.document}</small><small className="history-secondary">Expedido en {student.documentIssuedPlace || 'pendiente'}</small></td><td>{student.guardian}</td><td>{student.phone || '—'}</td></>}<td>{student.grade}</td><td><span className={`student-status ${student.status === 'Activo' ? 'status-active' : 'status-inactive'}`}>{student.status}</span></td>{canSeeSensitive && <td><div className="table-row-actions">{canManage && <button className="account-toggle" onClick={() => { setEditingStudent(student); setStudentDialog(true) }}><Pencil size={14}/> Editar</button>}{canManage && <button className="account-toggle delete-student-action" onClick={() => deleteStudent(student)}><Trash2 size={14}/> Retirar</button>}</div></td>}</tr>)}</tbody></table>
       {students.length === 0 && <div className="students-empty"><span className="empty-icon"><Users size={22}/></span><strong>{studentsError ? 'No se pudo cargar la lista' : 'Aún no hay estudiantes'}</strong><p>{studentsError ? 'Comprueba que la cuenta tenga el rol y las asignaciones correctas.' : 'Registra un estudiante o revisa los cursos asignados.'}</p>{canManage && students.length === 0 && <button className="button button-primary" onClick={() => setStudentDialog(true)}><Plus size={16}/> Crear primer registro</button>}</div>}
     </div>
   </section>
@@ -2440,13 +2440,13 @@ function App() {
     finally { setStudentSaving(false) }
   }
   const deleteStudent = async student => {
-    if (!window.confirm(`¿Eliminar definitivamente a ${student.name}? Se quitará también su vínculo con las cuentas de acudientes y esta acción no se puede deshacer.`)) return
+    if (!window.confirm(`¿Retirar a ${student.name}? Dejará de estar activo y se bloqueará su acceso como estudiante. Se conservarán su matrícula, notas, pagos, asistencias y documentos en el historial del colegio.`)) return
     try {
       const response = await fetch(`/api/students/${student.id}`, { method: 'DELETE', credentials: 'same-origin' })
       const result = await response.json()
-      if (!response.ok) return notify(result.error || 'No se pudo eliminar el estudiante.')
+      if (!response.ok) return notify(result.error || 'No se pudo retirar al estudiante.')
       await loadStudents()
-      notify('Estudiante eliminado.')
+      notify(result.alreadyRetired ? 'El estudiante ya estaba retirado.' : 'Estudiante retirado. Su historial permanece disponible en los registros del colegio.')
     } catch { notify('No se pudo conectar con el servidor.') }
   }
   const exportStudents = () => {
