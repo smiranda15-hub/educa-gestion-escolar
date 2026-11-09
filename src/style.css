@@ -161,6 +161,87 @@ html,body,#root,.app-shell{width:100%;max-width:100%;overflow-x:clip}.main-area{
 @media(max-width:850px){.institution-home-header{min-height:108px;padding-inline:26px}.institution-home-logo{width:62px;height:62px}.institution-home-contact>a,.institution-home-contact>div{padding-inline:12px}.institution-home-contact span{font-size:10px}.institution-home-hero{padding:48px 7vw;grid-template-columns:minmax(0,1.1fr) minmax(230px,.9fr);gap:12px}.institution-art-orbit{width:270px}.institution-art-schoolmark{width:140px;height:140px}.institution-home-features{padding-inline:7vw}}
 @media(max-width:650px){.institution-entry-top{height:62px;padding-inline:17px}.institution-entry-top>span{font-size:10px}.institution-chooser-content{width:calc(100% - 32px);padding:53px 0 60px}.institution-chooser-copy h1{font-size:34px}.institution-chooser-copy>p{font-size:13px}.institution-chooser-search{margin-top:25px}.institution-chooser-grid{grid-template-columns:1fr}.institution-chooser-card{min-height:76px}.institution-entry-footer{padding:13px 17px;font-size:9px}.institution-home-header{min-height:76px;padding:12px 16px;gap:10px}.institution-home-identity{gap:9px;flex:1}.institution-home-logo{width:44px;height:44px;border-radius:11px}.institution-home-identity>strong{font-size:14px}.institution-home-contact{display:none}.institution-mobile-enter{display:inline-flex;align-items:center;gap:6px;padding:9px 10px;border:0;border-radius:8px;background:var(--institution-accent);color:#fff;font:650 10px 'DM Sans',sans-serif}.institution-home-nav{justify-content:flex-start;gap:18px;min-height:52px;overflow:auto;padding:7px 14px;white-space:nowrap}.institution-home-nav>a{font-size:10px}.institution-home-nav>button{min-height:34px;padding-inline:11px;font-size:10px}.institution-home-hero{grid-template-columns:1fr;min-height:auto;padding:38px 22px 17px}.institution-hero-copy h1{font-size:clamp(34px,10vw,45px);letter-spacing:-1.5px}.institution-hero-description{font-size:13px;line-height:1.65}.institution-hero-actions{gap:10px;margin-top:19px}.institution-enter-button{min-height:42px;padding-inline:13px;font-size:11px}.institution-hero-access{font-size:9px;line-height:1.5}.institution-hero-art{min-height:185px}.institution-art-orbit{width:225px;height:150px}.institution-art-orbit-b{width:180px;height:190px}.institution-art-schoolmark{width:112px;height:112px;border-width:8px;border-radius:34px}.institution-art-chip{right:5%;bottom:2px;font-size:9px}.institution-art-star{bottom:28px}.institution-home-features{grid-template-columns:1fr;padding:14px 18px;gap:9px}.institution-home-features article{padding:13px}.institution-home-info{display:grid;margin:4px 18px 23px;padding:17px}.institution-home-info h2{font-size:17px}.institution-outline-button{justify-self:start}.institution-home-footer{align-items:flex-start;flex-direction:column;padding:17px 18px;gap:12px}.institution-footer-contact{gap:10px}.login-selected-institution{margin-bottom:13px}.login-selected-institution button{font-size:8px;padding:7px}}
 
+/* Portada institucional con fotografía escolar y navegación del plantel */
+.school-home{--school-ink:#173b35;--school-muted:#667b75;background:#f7f8f4;color:var(--school-ink)}
+.school-home-contact-bar{display:flex;align-items:center;justify-content:space-between;gap:18px;min-height:38px;padding:6px clamp(18px,6vw,88px);background:var(--institution-accent);color:#fff}
+.school-home-contact-items{display:flex;align-items:center;gap:22px;min-width:0}
+.school-home-contact-items>a,.school-home-contact-items>span{display:inline-flex;align-items:center;gap:7px;min-width:0;color:#fff;text-decoration:none;font-size:11px}
+.school-home-contact-items>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.school-home-contact-items svg{flex:none;opacity:.85}
+.school-home-contact-bar>button{display:inline-flex;align-items:center;gap:4px;flex:none;border:0;background:transparent;color:#fff;font:650 11px 'DM Sans',sans-serif;cursor:pointer}
+.school-home-header{position:relative;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:22px;min-height:84px;margin:0 clamp(18px,4vw,60px) -27px;padding:12px clamp(16px,3vw,38px);border:1px solid #e4e9e5;border-radius:0 0 12px 12px;background:#fff;box-shadow:0 12px 30px #173b3512}
+.school-home .institution-home-identity{flex:0 1 300px;gap:12px}
+.school-home .institution-home-logo{width:54px;height:54px;border-radius:12px;background:#f1f5ee}
+.school-home .institution-home-identity>strong{overflow:hidden;color:#233e36;font-size:clamp(14px,1.5vw,20px);text-overflow:ellipsis;white-space:nowrap}
+.school-home-nav{display:flex;align-items:center;justify-content:center;gap:clamp(14px,2.6vw,36px);min-width:0}
+.school-home-nav>a{color:#435b52;font-size:12px;font-weight:650;text-decoration:none;white-space:nowrap}
+.school-home-nav>a:hover,.school-home-nav>a.institution-nav-current{color:var(--institution-accent)}
+.school-home-portal-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:42px;padding:0 15px;border:0;border-radius:8px;background:var(--institution-accent);color:#fff;font:700 12px 'DM Sans',sans-serif;text-decoration:none;white-space:nowrap;cursor:pointer;transition:filter .18s,transform .18s}
+.school-home-portal-button:hover{filter:brightness(.94);transform:translateY(-1px)}
+.school-home .institution-mobile-enter{display:none}
+.school-home-main{width:100%;margin:0 auto}
+.school-home-hero{position:relative;isolation:isolate;display:flex;align-items:center;min-height:clamp(500px,67vh,700px);padding:88px clamp(24px,9vw,140px) 62px;overflow:hidden;background:linear-gradient(120deg,#183f35,#386f55 58%,#8aaa66)}
+.school-home-hero-photo-image,.school-home-hero-shade,.school-home-hero-pattern{position:absolute;z-index:-1;inset:0;width:100%;height:100%}
+.school-home-hero-photo-image{object-fit:cover;object-position:center 54%;filter:saturate(.94) contrast(1.04)}
+.school-home-hero-shade{background:linear-gradient(90deg,#102c28e8 0%,#193b33c9 42%,#1d3b3380 70%,#1d352f45 100%),linear-gradient(0deg,#122c286b,transparent 45%)}
+.school-home-hero-pattern{display:grid;place-items:center;background:radial-gradient(ellipse at 77% 45%,#b2c98b55,transparent 38%),linear-gradient(120deg,#14382f,#286887 68%,#83a26f)}
+.school-home-hero-pattern>span{display:grid;place-items:center;width:230px;height:230px;border:1px solid #ffffff66;border-radius:50%;background:#ffffff1c;color:#fff;box-shadow:0 0 0 32px #ffffff0c,0 0 0 68px #ffffff09}
+.school-home-hero-pattern img{width:72%;height:72%;object-fit:contain}
+.school-home-hero-content{width:min(100%,1240px);margin:0 auto;color:#fff}
+.school-home-eyebrow{display:inline-flex;align-items:center;gap:9px;color:#e4f0e8;font-size:11px;font-weight:800;letter-spacing:1.6px}
+.school-home-kicker{margin:38px 0 8px;color:#e1eee8;font-size:15px;font-weight:650}
+.school-home-hero h1{max-width:850px;margin:0;color:#fff;font:800 clamp(42px,6.2vw,78px)/1.02 Manrope,sans-serif;letter-spacing:-2.5px;text-shadow:0 2px 25px #10272266}
+.school-home-hero-lede{max-width:610px;margin:18px 0 0;color:#f2f7f3;font-size:clamp(15px,1.6vw,19px);line-height:1.65;text-shadow:0 1px 12px #10272255}
+.school-home-hero-actions{display:flex;align-items:center;gap:17px;flex-wrap:wrap;margin-top:26px}
+.school-home-primary-action{display:inline-flex;align-items:center;gap:12px;min-height:50px;padding:0 20px;border:0;border-radius:8px;background:var(--institution-accent);color:#fff;font:750 13px 'DM Sans',sans-serif;box-shadow:0 10px 28px #112e2766;cursor:pointer}
+.school-home-primary-action:hover{filter:brightness(1.08)}
+.school-home-secondary-action{display:inline-flex;align-items:center;gap:8px;min-height:46px;padding:0 15px;border:1px solid #ffffffa8;border-radius:8px;background:#ffffff12;color:#fff;font-size:13px;font-weight:700;text-decoration:none;backdrop-filter:blur(8px)}
+.school-home-trust{display:flex;align-items:center;gap:8px;margin-top:25px;color:#e3eee9;font-size:11px}
+.school-home-trust svg{color:#8dd0a6}
+.school-home-photo-caption{position:absolute;right:clamp(20px,5vw,76px);bottom:22px;display:flex;align-items:center;gap:7px;max-width:min(60%,440px);padding:10px 13px;border:1px solid #ffffff38;border-radius:30px;background:#102c28a6;color:#fff;font-size:11px;backdrop-filter:blur(8px)}
+.school-home-intro{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:clamp(34px,7vw,94px);padding:clamp(55px,8vw,100px) clamp(22px,9vw,140px)}
+.school-home-intro-photo{position:relative;min-height:330px;overflow:hidden;border-radius:18px;background:#e9efea;box-shadow:0 18px 45px #1a44331c}
+.school-home-intro-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 54%;transition:transform .5s}
+.school-home-intro-photo:hover img{transform:scale(1.025)}
+.school-home-intro-photo:after{position:absolute;inset:45% 0 0;background:linear-gradient(transparent,#102d27aa);content:''}
+.school-home-intro-photo>span{position:absolute;z-index:1;left:19px;bottom:17px;display:flex;align-items:center;gap:8px;color:#fff;font-size:12px;font-weight:700}
+.school-home-intro-copy{max-width:600px}
+.school-home-intro-copy h2,.school-home-section-heading h2{margin:14px 0;color:#203d35;font:800 clamp(28px,3.2vw,42px)/1.12 Manrope,sans-serif;letter-spacing:-1.1px}
+.school-home-intro-copy>p,.school-home-section-heading>p{margin:0;color:var(--school-muted);font-size:15px;line-height:1.75}
+.school-home-facts{display:grid;gap:13px;margin-top:27px}
+.school-home-facts>div{display:flex;align-items:flex-start;gap:11px;padding:13px 14px;border:1px solid #e2e9e2;border-radius:10px;background:#fff}
+.school-home-facts>div>svg{flex:none;margin-top:2px;color:var(--institution-accent)}
+.school-home-facts>div>span{display:grid;gap:4px;min-width:0}
+.school-home-facts small{color:#87958a;font-size:10px}
+.school-home-facts strong{overflow-wrap:anywhere;color:#315248;font-size:12px}
+.school-home-gallery,.school-home-life{padding:clamp(54px,7vw,88px) clamp(22px,9vw,140px);background:#eef3ed}
+.school-home-section-heading{max-width:700px;margin:0 auto 30px;text-align:center}
+.school-home-section-heading h2{margin-bottom:9px}
+.school-home-gallery-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;max-width:1180px;margin:0 auto}
+.school-home-gallery-grid figure{position:relative;min-height:280px;margin:0;overflow:hidden;border-radius:14px;background:#dce7df}
+.school-home-gallery-grid figure:after{position:absolute;inset:45% 0 0;background:linear-gradient(transparent,#102c28ba);content:''}
+.school-home-gallery-grid img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transition:transform .5s,filter .3s}
+.school-home-gallery-grid figure:hover img{transform:scale(1.03);filter:saturate(1.04)}
+.school-home-gallery-grid figcaption{position:absolute;z-index:1;right:18px;bottom:16px;left:18px;display:grid;gap:3px;color:#fff}
+.school-home-gallery-grid figcaption span{font-size:14px;font-weight:750}
+.school-home-gallery-grid figcaption small{color:#e3eee7;font-size:11px}
+.school-home-life{background:#fff}
+.school-home-life-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;max-width:1180px;margin:0 auto}
+.school-home-life-grid article{padding:23px;border:1px solid #e3eae4;border-radius:13px;background:#fff;box-shadow:0 8px 22px #1d403308}
+.school-home-life-grid article>span{display:grid;place-items:center;width:42px;height:42px;margin-bottom:17px;border-radius:12px;background:color-mix(in srgb,var(--institution-accent) 12%,white);color:var(--institution-accent)}
+.school-home-life-grid h3{margin:0 0 7px;color:#2b4b40;font:750 16px Manrope,sans-serif}
+.school-home-life-grid p{margin:0;color:#75867c;font-size:12px;line-height:1.65}
+.school-home-footer{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:auto;padding:22px clamp(22px,6vw,88px);border-top:1px solid #e2e9e2;background:#fff}
+.school-home-footer-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.school-home-footer-brand .institution-home-logo{width:45px;height:45px;border-radius:10px}
+.school-home-footer-brand>div{display:grid;gap:4px;min-width:0}
+.school-home-footer-brand strong{overflow:hidden;color:#2b493e;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.school-home-footer-brand>div>span{color:#829087;font-size:10px}
+.school-home-footer-contact{display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:#687d71;font-size:10px}
+@media(max-width:1000px){.school-home-header{gap:13px;margin-inline:20px;padding-inline:18px}.school-home .institution-home-identity{flex-basis:220px}.school-home-nav{gap:14px}.school-home-nav>a{font-size:11px}.school-home-portal-button{min-height:39px;padding-inline:11px;font-size:11px}.school-home-hero{min-height:540px}.school-home-intro,.school-home-gallery,.school-home-life{padding-inline:6vw}}
+@media(max-width:760px){.school-home-contact-bar{min-height:34px;padding-inline:14px}.school-home-contact-items{gap:12px}.school-home-contact-items>a,.school-home-contact-items>span{font-size:9px}.school-home-contact-items>span{display:none}.school-home-header{min-height:72px;margin:0 10px -18px;padding:9px 12px;border-radius:0 0 10px 10px}.school-home .institution-home-identity{flex:1;gap:8px}.school-home .institution-home-logo{width:43px;height:43px}.school-home .institution-home-identity>strong{font-size:13px}.school-home-nav{display:none}.school-home-header>.school-home-portal-button{display:none}.school-home .institution-mobile-enter{display:inline-flex;min-height:38px;padding:0 11px;border-radius:7px;font-size:11px}.school-home-hero{min-height:560px;padding:82px 23px 56px}.school-home-hero-photo-image{object-position:53% center}.school-home-hero-shade{background:linear-gradient(90deg,#102c28d9,#193b3390 70%,#1d3b334d),linear-gradient(0deg,#122c2885,transparent 58%)}.school-home-hero h1{font-size:clamp(39px,10vw,58px);letter-spacing:-1.7px}.school-home-kicker{margin-top:28px}.school-home-hero-lede{max-width:470px;font-size:15px}.school-home-photo-caption{right:14px;bottom:13px;max-width:75%;font-size:9px}.school-home-intro{grid-template-columns:1fr;gap:25px;padding:43px 18px}.school-home-intro-photo{min-height:260px;order:2}.school-home-intro-copy h2,.school-home-section-heading h2{font-size:29px}.school-home-intro-copy>p,.school-home-section-heading>p{font-size:13px}.school-home-facts{gap:8px;margin-top:18px}.school-home-facts>div{padding:11px}.school-home-gallery,.school-home-life{padding:43px 18px}.school-home-gallery-grid{grid-template-columns:1fr;gap:11px}.school-home-gallery-grid figure{min-height:235px}.school-home-gallery-grid figure:first-child{min-height:260px}.school-home-life-grid{grid-template-columns:1fr;gap:10px}.school-home-life-grid article{display:grid;grid-template-columns:42px 1fr;column-gap:12px;padding:15px}.school-home-life-grid article>span{grid-row:span 2;margin:0}.school-home-life-grid h3{align-self:end;margin-bottom:4px;font-size:14px}.school-home-life-grid p{font-size:11px}.school-home-footer{align-items:flex-start;flex-direction:column;gap:14px;padding:18px}.school-home-footer-contact{display:grid;gap:7px}.school-home-footer>.school-home-portal-button{display:inline-flex}}
+@media(prefers-reduced-motion:reduce){.school-home *{scroll-behavior:auto!important;transition:none!important}}
+
 /* Institution chooser: balanced, branded layout with a clear selection action. */
 .institution-chooser-page{background:radial-gradient(ellipse at 12% 70%,#eaf5f3 0,transparent 34%),radial-gradient(ellipse at 92% 12%,#efefff 0,transparent 35%),#f6f8fb}
 .institution-chooser-page .institution-entry-top>span{display:flex;align-items:center;gap:7px}

@@ -8,7 +8,7 @@ import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BookOpen, Building2, CreditCard,
   CalendarDays, Check, ChevronDown, ChevronRight, ClipboardCheck,
   Award, CalendarPlus, Clock3, Download, Eye, EyeOff, FileText, GraduationCap, History, IdCard, LayoutDashboard, LockKeyhole, LogOut, Menu,
-  PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X, Mail, Send, Inbox, Reply, Play,
+  PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X, Mail, MapPin, Phone, Send, Inbox, Reply, Play,
 } from 'lucide-react'
 import './style.css'
 import './edu-design.css'
@@ -128,7 +128,75 @@ function InstitutionChooser({ schools, search, setSearch, onSelect }) {
 }
 function InstitutionHome({ school, onEnter, onChange }) {
   const accentStyle = { '--institution-accent': school.primaryColor || '#286887' }
-  return <div className="institution-entry-page institution-home-page" style={accentStyle}><header className="institution-home-header"><a className="institution-home-identity" href="#inicio"><span className="institution-home-logo">{school.logoUrl ? <img src={school.logoUrl} alt={`Logo de ${school.name}`}/> : <span>{school.initials}</span>}</span><strong>{school.name}</strong></a><div className="institution-home-contact">{school.contactEmail && <a href={`mailto:${school.contactEmail}`}><small>Correo institucional</small><span>{school.contactEmail}</span></a>}{school.contactPhone && <a href={`tel:${school.contactPhone.replace(/[^+\d]/g, '')}`}><small>Teléfono</small><span>{school.contactPhone}</span></a>}{school.address && <div><small>Dirección</small><span>{school.address}</span></div>}</div><button type="button" className="institution-mobile-enter" onClick={onEnter}><LockKeyhole size={16}/> Ingresar</button></header><nav className="institution-home-nav" aria-label="Navegación institucional"><a className="institution-nav-current" href="#inicio">Inicio</a><a href="#institucion">Quiénes somos</a><a href="#novedades">Noticias</a><a href="#contacto">Contáctanos</a><button type="button" onClick={onEnter}>Ingresar a EDUCA <ArrowRight size={15}/></button></nav><main><section className="institution-home-hero" id="inicio"><div className="institution-hero-copy"><span className="institution-entry-eyebrow"><span className="live-dot"/> COMUNIDAD EDUCATIVA</span><p className="institution-hero-kicker">Bienvenidos a</p><h1>{school.name}</h1><p className="institution-hero-description">Consulta el espacio digital de tu institución para acompañar la vida académica, la comunicación escolar y el progreso de cada estudiante.</p><div className="institution-hero-actions"><button type="button" className="institution-enter-button" onClick={onEnter}>Ingresar a la plataforma <ArrowRight size={17}/></button><button type="button" className="institution-change-button" onClick={onChange}>Elegir otro plantel</button></div><div className="institution-hero-access"><ShieldCheck size={16}/> Acceso seguro para personal, estudiantes y acudientes autorizados</div></div><div className="institution-hero-art" aria-hidden="true"><div className="institution-art-orbit institution-art-orbit-a"/><div className="institution-art-orbit institution-art-orbit-b"/><div className="institution-art-schoolmark">{school.logoUrl ? <img src={school.logoUrl} alt=""/> : <GraduationCap size={72}/>}</div><span className="institution-art-chip"><BookOpen size={16}/> Aprendizaje</span><span className="institution-art-dot institution-art-dot-a"/><span className="institution-art-dot institution-art-dot-b"/><span className="institution-art-star">✦</span></div></section><section className="institution-home-features" id="institucion"><article><span><BookOpen size={19}/></span><div><strong>Gestión académica</strong><p>Cursos, evaluaciones, trabajos y boletines en el espacio del colegio.</p></div></article><article><span><CalendarDays size={19}/></span><div><strong>Vida escolar</strong><p>Consulta asistencia, actividades y comunicaciones institucionales.</p></div></article><article><span><Users size={19}/></span><div><strong>Comunidad conectada</strong><p>Acceso según el rol y las autorizaciones de cada cuenta.</p></div></article></section><section className="institution-home-info" id="novedades"><div><span className="institution-entry-eyebrow">INFORMACIÓN INSTITUCIONAL</span><h2>Todo lo que necesitas, en un solo lugar</h2><p>Inicia sesión para consultar las novedades, actividades y comunicaciones publicadas por tu institución.</p></div><button type="button" className="institution-outline-button" onClick={onEnter}>Continuar al ingreso <ArrowRight size={15}/></button></section></main><footer className="institution-home-footer" id="contacto"><div><strong>{school.name}</strong><span>Una comunidad educativa conectada con Educa.</span></div><div className="institution-footer-contact">{school.contactEmail && <a href={`mailto:${school.contactEmail}`}>{school.contactEmail}</a>}{school.contactPhone && <a href={`tel:${school.contactPhone.replace(/[^+\d]/g, '')}`}>{school.contactPhone}</a>}{school.address && <span>{school.address}</span>}</div><button type="button" onClick={onChange}>Cambiar institución</button></footer></div>
+  const isCaldas = /caldas/i.test(`${school.name || ''} ${school.slug || ''}`)
+  const heroPhoto = isCaldas ? '/images/caldas-comunidad.jpg' : ''
+  const communityPhoto = isCaldas ? '/images/caldas-vida-escolar.jpg' : ''
+  const contactItems = [school.contactEmail, school.contactPhone, school.address].filter(Boolean)
+  return <div className={`institution-entry-page institution-home-page school-home ${isCaldas ? 'school-home-caldas' : ''}`} style={accentStyle}>
+    <div className="school-home-contact-bar">
+      <div className="school-home-contact-items">
+        {school.contactEmail && <a href={`mailto:${school.contactEmail}`}><Mail size={14}/><span>{school.contactEmail}</span></a>}
+        {school.contactPhone && <a href={`tel:${school.contactPhone.replace(/[^+\d]/g, '')}`}><Phone size={14}/><span>{school.contactPhone}</span></a>}
+        {school.address && <span><MapPin size={14}/>{school.address}</span>}
+      </div>
+      <button type="button" onClick={onChange}><ChevronLeft size={14}/> Elegir otro plantel</button>
+    </div>
+    <header className="school-home-header">
+      <a className="institution-home-identity" href="#inicio" aria-label={`Inicio de ${school.name}`}>
+        <span className="institution-home-logo">{school.logoUrl ? <img src={school.logoUrl} alt=""/> : <span>{school.initials}</span>}</span>
+        <strong>{school.name}</strong>
+      </a>
+      <nav className="school-home-nav" aria-label="Navegación institucional">
+        <a className="institution-nav-current" href="#inicio">Inicio</a>
+        <a href="#institucion">Nuestro colegio</a>
+        {isCaldas && <a href="#galeria">Galería</a>}
+        <a href="#vida-escolar">Vida escolar</a>
+        <a href="#contacto">Contacto</a>
+      </nav>
+      <button type="button" className="school-home-portal-button" onClick={onEnter}><LockKeyhole size={15}/> Portal EDUCA <ArrowRight size={16}/></button>
+      <button type="button" className="institution-mobile-enter" onClick={onEnter}><LockKeyhole size={16}/> Ingresar</button>
+    </header>
+    <main className="school-home-main">
+      <section className={`school-home-hero ${heroPhoto ? 'school-home-hero-photo' : ''}`} id="inicio">
+        {heroPhoto ? <img className="school-home-hero-photo-image" src={heroPhoto} alt={`Estudiantes de ${school.name} reunidos en su colegio`} fetchPriority="high"/> : <div className="school-home-hero-pattern" aria-hidden="true"><span>{school.logoUrl ? <img src={school.logoUrl} alt=""/> : <GraduationCap size={110}/>}</span></div>}
+        <div className="school-home-hero-shade"/>
+        <div className="school-home-hero-content">
+          <span className="school-home-eyebrow"><span className="live-dot"/> COMUNIDAD EDUCATIVA</span>
+          <p className="school-home-kicker">Bienvenidos a</p>
+          <h1>{school.name}</h1>
+          <p className="school-home-hero-lede">Un espacio para aprender, compartir y crecer junto a nuestra comunidad educativa.</p>
+          <div className="school-home-hero-actions">
+            <button type="button" className="school-home-primary-action" onClick={onEnter}>Ingresar al portal <ArrowRight size={17}/></button>
+            <a className="school-home-secondary-action" href="#institucion">Conocer el colegio <ChevronDown size={16}/></a>
+          </div>
+          <div className="school-home-trust"><ShieldCheck size={16}/> Acceso a EDUCA para la comunidad autorizada</div>
+        </div>
+        {isCaldas && <div className="school-home-photo-caption"><MapPin size={15}/><span>{school.address || 'Nuestra comunidad educativa'}</span></div>}
+      </section>
+      <section className="school-home-intro" id="institucion">
+        {communityPhoto && <div className="school-home-intro-photo"><img src={communityPhoto} alt={`Actividad de la comunidad de ${school.name}`} loading="lazy"/><span><Users size={16}/> Nuestra comunidad</span></div>}
+        <div className="school-home-intro-copy">
+          <span className="institution-entry-eyebrow"><span className="live-dot"/> NUESTRA INSTITUCIÓN</span>
+          <h2>Una comunidad que aprende y crece</h2>
+          <p>En {school.name}, estudiantes, familias, docentes y equipo institucional comparten el propósito de acompañar cada etapa del aprendizaje.</p>
+          <div className="school-home-facts">
+            {school.address && <div><MapPin size={17}/><span><small>Ubicación</small><strong>{school.address}</strong></span></div>}
+            {school.contactPhone && <div><Phone size={17}/><span><small>Comunícate con nosotros</small><strong>{school.contactPhone}</strong></span></div>}
+            {school.contactEmail && <div><Mail size={17}/><span><small>Correo institucional</small><strong>{school.contactEmail}</strong></span></div>}
+          </div>
+        </div>
+      </section>
+      {isCaldas && <section className="school-home-gallery" id="galeria">
+        <div className="school-home-section-heading"><span className="institution-entry-eyebrow">ASÍ VIVIMOS EL COLEGIO</span><h2>Momentos de nuestra comunidad</h2><p>Un vistazo a las actividades y encuentros que hacen parte de la vida escolar.</p></div>
+        <div className="school-home-gallery-grid"><figure className="school-home-gallery-wide"><img src={heroPhoto} alt={`Estudiantes de ${school.name} durante una actividad escolar`} loading="lazy"/><figcaption><span>Comunidad Caldas</span><small>Unidos en la vida escolar</small></figcaption></figure><figure><img src={communityPhoto} alt={`Estudiantes de ${school.name} en una celebración escolar`} loading="lazy"/><figcaption><span>Aprendemos juntos</span><small>Encuentros que nos unen</small></figcaption></figure></div>
+      </section>}
+      <section className="school-home-life" id="vida-escolar">
+        <div className="school-home-section-heading"><span className="institution-entry-eyebrow">EDUCA PARA NUESTRA COMUNIDAD</span><h2>La vida escolar, más cerca</h2><p>Ingresa al espacio de tu institución para consultar la información habilitada para tu perfil.</p></div>
+        <div className="school-home-life-grid"><article><span><BookOpen size={20}/></span><h3>Aprendizaje</h3><p>Cursos, actividades, evaluaciones y seguimiento académico.</p></article><article><span><CalendarDays size={20}/></span><h3>Vida escolar</h3><p>Asistencia, calendario y eventos de la institución.</p></article><article><span><Users size={20}/></span><h3>Familias conectadas</h3><p>Comunicaciones y acceso a la información escolar autorizada.</p></article></div>
+      </section>
+    </main>
+    <footer className="school-home-footer" id="contacto"><div className="school-home-footer-brand"><span className="institution-home-logo">{school.logoUrl ? <img src={school.logoUrl} alt=""/> : <span>{school.initials}</span>}</span><div><strong>{school.name}</strong><span>Una comunidad educativa conectada con EDUCA.</span></div></div><div className="school-home-footer-contact">{contactItems.map((item, index) => <span key={`${index}-${item}`}>{item}</span>)}</div><button type="button" className="school-home-portal-button" onClick={onEnter}>Ingresar a EDUCA <ArrowRight size={15}/></button></footer>
+  </div>
 }
 const getLocalDate = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10) }
 
@@ -1086,7 +1154,11 @@ function App() {
   const [auditTo, setAuditTo] = useState('')
   const [loginError, setLoginError] = useState('')
   const [loginNotice, setLoginNotice] = useState('')
-  const [active, setActive] = useState('Resumen')
+  const [active, setActive] = useState(() => {
+    const match = window.location.hash.match(/^#modulo\/(.+)$/)
+    if (!match) return 'Resumen'
+    try { return decodeURIComponent(match[1]) || 'Resumen' } catch { return 'Resumen' }
+  })
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
@@ -1331,6 +1403,44 @@ function App() {
   const selectedSchool = schools.find(school => school.slug === loginSchool)
   const activeBrandSettings = selectedSchool || brandSettings
   const matchingSchools = schools.filter(school => `${school.name} ${school.slug}`.toLocaleLowerCase('es').includes(schoolSearch.trim().toLocaleLowerCase('es')))
+  useEffect(() => {
+    const schoolName = user?.school?.name || selectedSchool?.name || activeBrandSettings?.name
+    const title = authenticated
+      ? `${active} | ${schoolName || 'EDUCA'} | Gestión escolar`
+      : selectedSchool
+        ? `${schoolName} | Acceso a EDUCA`
+        : loginStep === 'select'
+          ? 'Elegir institución | EDUCA'
+          : 'EDUCA | Gestión escolar'
+    document.title = title
+
+    const iconHref = authenticated
+      ? user?.school?.hasLogo ? `/api/school/logo?v=${encodeURIComponent(user?.school?.slug || 'institucion')}` : '/educa-symbol.svg'
+      : selectedSchool?.logoUrl || '/educa-symbol.svg'
+    document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach(link => {
+      link.href = iconHref
+      if (iconHref === '/educa-symbol.svg') link.type = 'image/svg+xml'
+      else link.removeAttribute('type')
+    })
+  }, [active, authenticated, user?.school?.name, user?.school?.slug, user?.school?.hasLogo, selectedSchool?.name, selectedSchool?.logoUrl, loginStep])
+  useEffect(() => {
+    if (!authenticated) return
+    const nextHash = `#modulo/${encodeURIComponent(active)}`
+    if (window.location.hash !== nextHash) window.history.pushState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`)
+    const syncActiveFromUrl = () => {
+      const match = window.location.hash.match(/^#modulo\/(.+)$/)
+      if (!match) {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#modulo/${encodeURIComponent(active)}`)
+        return
+      }
+      try {
+        const label = decodeURIComponent(match[1])
+        if (label && label !== active) setActive(label)
+      } catch { /* Ignora fragmentos que no sean una ruta de módulo válida. */ }
+    }
+    window.addEventListener('hashchange', syncActiveFromUrl)
+    return () => window.removeEventListener('hashchange', syncActiveFromUrl)
+  }, [active, authenticated])
   useEffect(() => {
     if (!accountMenuOpen) return
     const closeOnOutsideClick = event => {
