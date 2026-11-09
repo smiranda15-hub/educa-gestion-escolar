@@ -1806,6 +1806,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       attendance: ['admin', 'rectoria', 'secretaria', 'docente'],
       late_arrivals: ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente'],
       grades: ['admin', 'rectoria', 'secretaria', 'docente'],
+      rankings: ['admin', 'rectoria', 'secretaria', 'docente'],
+      honor_roll: ['admin', 'rectoria', 'secretaria', 'docente'],
+      pass_fail: ['admin', 'rectoria', 'secretaria', 'docente'],
       enrollments: ['admin', 'secretaria'],
       guardians: ['admin', 'secretaria'],
       event_attendance: ['admin', 'rectoria', 'coordinacion', 'secretaria', 'docente'],
@@ -1825,6 +1828,62 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       selectedCourse = await db.get('SELECT id, grade FROM courses WHERE id = ? AND school_id = ?', courseId, user.school_id)
       if (!selectedCourse) return json(response, 404, { error: 'No encontramos ese curso en este colegio.' })
       if (user.role === 'docente' && !await db.get('SELECT 1 FROM course_teachers WHERE course_id = ? AND user_id = ?', courseId, user.id)) return json(response, 403, { error: 'Ese curso no está asignado a tu cuenta.' })
+    }
+    if (['rankings', 'honor_roll', 'pass_fail'].includes(type)) {
+      const gradeParams = [user.school_id, user.school_id]
+      let gradeSql = `SELECT st.id AS student_id, st.full_name AS student_name, c.id AS course_id, c.name AS course_name,
+        c.grade, c.academic_year, a.subject, a.period, a.max_score, a.weight_percent, sg.score,
+        gr.scale_min, gr.scale_max, gr.passing_score
+        FROM student_grades sg JOIN students st ON st.id = sg.student_id AND st.school_id = ?
+        JOIN grade_assessments a ON a.id = sg.assessment_id AND a.school_id = st.school_id
+        JOIN courses c ON c.id = a.course_id AND c.school_id = st.school_id
+        LEFT JOIN academic_grade_rules gr ON gr.school_id = c.school_id AND gr.course_id = c.id AND gr.subject = a.subject AND gr.period = a.period
+        WHERE st.school_id = ? AND a.is_published = 1`
+      if (selectedCourse) { gradeSql += ' AND c.id = ?'; gradeParams.push(selectedCourse.id) }
+      if (academicYear) { gradeSql += ' AND LEFT(c.academic_year, 4) = ?'; gradeParams.push(academicYearFilter) }
+      if (from) { gradeSql += ' AND substr(sg.updated_at, 1, 10) >= ?'; gradeParams.push(from) }
+      if (to) { gradeSql += ' AND substr(sg.updated_at, 1, 10) <= ?'; gradeParams.push(to) }
+      if (user.role === 'docente') { gradeSql += ' AND EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?)'; gradeParams.push(user.id) }
+      gradeSql += ' ORDER BY c.academic_year DESC, c.grade, c.name, a.subject, st.full_name'
+      const gradeRows = await db.all(gradeSql, ...gradeParams)
+      const assignmentRows = await db.all(`SELECT ct.course_id, ct.subject, u.full_name AS teacher_name FROM course_teachers ct
+        JOIN courses c ON c.id = ct.course_id JOIN users u ON u.id = ct.user_id
+        WHERE c.school_id = ? AND u.is_active = 1`, user.school_id)
+      const teacherFor = (course, subject) => assignmentRows.filter(row => row.course_id === course && row.subject === subject).map(row => row.teacher_name).join(', ') || 'Sin asignar'
+      const courseStudent = new Map(), subjectStudent = new Map()
+      for (const row of gradeRows) {
+        const weight = Number(row.weight_percent) || 100
+        const normalized = Number(row.score) / Number(row.max_score) * 100
+        const courseKey = `${row.course_id}|${row.student_id}`
+        const courseRecord = courseStudent.get(courseKey) || { student: row.student_name, course: row.course_name, grade: row.grade, year: academicYearStart(row.academic_year), total: 0, weight: 0 }
+        courseRecord.total += normalized * weight; courseRecord.weight += weight; courseStudent.set(courseKey, courseRecord)
+        const subjectKey = `${row.course_id}|${row.subject}|${row.student_id}`
+        const subjectRecord = subjectStudent.get(subjectKey) || { student: row.student_name, course: row.course_name, courseId: row.course_id, grade: row.grade, year: academicYearStart(row.academic_year), subject: row.subject, period: row.period, total: 0, weight: 0, minimum: Number(row.scale_min), maximum: Number(row.scale_max), passing: Number(row.passing_score) }
+        subjectRecord.total += normalized * weight; subjectRecord.weight += weight
+        if (Number.isFinite(Number(row.passing_score))) subjectRecord.passing = Number(row.passing_score)
+        subjectStudent.set(subjectKey, subjectRecord)
+      }
+      const courseAverages = [...courseStudent.values()].map(record => ({ ...record, average: record.weight ? record.total / record.weight : 0 }))
+      const byCourse = new Map()
+      for (const record of courseAverages) { const key = `${record.course}|${record.year}`; if (!byCourse.has(key)) byCourse.set(key, []); byCourse.get(key).push(record) }
+      for (const records of byCourse.values()) { records.sort((a, b) => b.average - a.average || a.student.localeCompare(b.student, 'es')); records.forEach((record, index) => { record.rank = index + 1 }) }
+      let records
+      if (type === 'rankings' || type === 'honor_roll') {
+        records = courseAverages.sort((a, b) => a.course.localeCompare(b.course, 'es') || a.rank - b.rank).map(record => ({
+          Estudiante: record.student, Grado: record.grade, Curso: record.course, 'Año lectivo': record.year, Puesto: record.rank,
+          'Promedio porcentual': `${record.average.toFixed(1)}%`, ...(type === 'honor_roll' ? { 'Cuadro de honor': record.rank <= 3 ? `Puesto ${record.rank}` : 'No aplica' } : {})
+        }))
+      } else {
+        records = [...subjectStudent.values()].map(record => {
+          const average = record.weight ? record.total / record.weight : 0
+          const min = Number.isFinite(record.minimum) ? record.minimum : 0
+          const max = Number.isFinite(record.maximum) && record.maximum > min ? record.maximum : 100
+          const passing = Number.isFinite(record.passing) ? record.passing : 60
+          const gradeValue = min + (average / 100) * (max - min)
+          return { Estudiante: record.student, Grado: record.grade, Curso: record.course, 'Año lectivo': record.year, Asignatura: record.subject, Periodo: record.period, Docente: teacherFor(record.courseId, record.subject), Promedio: gradeValue.toFixed(2), Aprobación: gradeValue >= passing ? 'Aprobado' : 'Reprobado', 'Nota mínima': passing }
+        })
+      }
+      return json(response, 200, { records: records.slice(0, 5000), truncated: records.length > 5000 })
     }
     const params = [user.school_id]
     let sql = ''
