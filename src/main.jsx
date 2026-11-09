@@ -1417,7 +1417,10 @@ function App() {
     return Number(aSubmitted) - Number(bSubmitted) || a.studentName.localeCompare(b.studentName, 'es')
   })
 
+  // Las URLs públicas pueden usar un alias distinto del slug interno (por ejemplo, Caldas).
   const selectedSchool = schools.find(school => school.slug === loginSchool)
+    || institutionFromPublicSlug(schools, loginSchool)
+    || institutionFromPublicSlug(schools, institutionRoute?.[1])
   const activeBrandSettings = selectedSchool || brandSettings
   const isCaldasLogin = /caldas/i.test(`${selectedSchool?.name || ''} ${selectedSchool?.slug || ''}`)
   const matchingSchools = schools.filter(school => `${school.name} ${school.slug}`.toLocaleLowerCase('es').includes(schoolSearch.trim().toLocaleLowerCase('es')))
@@ -1430,6 +1433,7 @@ function App() {
       if (school) setBrandSettings(school)
       setLoginStep(school ? (route[2] ? 'login' : 'home') : 'select')
     }
+    syncInstitutionRoute()
     window.addEventListener('popstate', syncInstitutionRoute)
     return () => window.removeEventListener('popstate', syncInstitutionRoute)
   }, [authenticated, schools])
@@ -1536,10 +1540,10 @@ function App() {
   const login = async (event) => {
     event.preventDefault()
     setLoginError('')
-    if (!loginSchool) return setLoginError('Selecciona tu colegio para continuar.')
+    if (!selectedSchool) return setLoginError('No encontramos este plantel. Vuelve a elegir tu institución.')
     const formElement = event.currentTarget; const form = new FormData(formElement)
     try {
-      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ school: loginSchool, email: form.get('email'), password: form.get('password') }) })
+      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ school: selectedSchool.slug, email: form.get('email'), password: form.get('password') }) })
       const result = await response.json()
       if (!response.ok) return setLoginError(result.error || 'No pudimos iniciar sesión.')
       setTermsLoading(true)
