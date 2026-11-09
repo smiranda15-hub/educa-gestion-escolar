@@ -160,9 +160,10 @@ La lista de destinatarios depende del rol, de que la cuenta esté activa y de su
 
 1. En **Calificaciones**, elige curso/asignatura y periodo.
 2. Usa **Nueva evaluación** para un trabajo entregable o evaluación, o **Nota de actividad en clase** para registrar una calificación de actividad presencial.
-3. Completa nombre, tipo, descripción, fecha límite y puntaje máximo. Para apoyo puede adjuntar imágenes permitidas o un enlace Google Forms HTTPS.
-4. Para evaluación en línea, agrega preguntas y respuestas correctas, define publicación y, si aplica, activa registro de pérdida de foco/cambio de pestaña.
-5. Publica cuando esté lista; revisa el curso y periodo antes de hacerlo.
+3. Completa nombre, tipo, descripción, fecha límite y puntaje máximo. Puedes adjuntar imágenes de apoyo o un enlace HTTPS de Google Forms; el enlace solo abre el formulario externo y no importa sus calificaciones a EDUCA.
+4. Si enlazas Google Forms, el estudiante puede adjuntar a su entrega una captura, foto o archivo con el resultado. El docente revisa el comprobante y registra la nota en EDUCA.
+5. Para una evaluación creada dentro de EDUCA, agrega preguntas de selección única, selección múltiple, respuesta corta o respuesta abierta. Las respuestas cerradas y las respuestas cortas con clave se califican automáticamente; las abiertas quedan para revisión docente.
+6. Publica cuando esté lista; revisa el curso y periodo antes de hacerlo.
 
 El registro de cambios de foco no detecta qué aplicación abrió el estudiante ni demuestra uso de ChatGPT u otra herramienta. No debe usarse como prueba automática de fraude.
 

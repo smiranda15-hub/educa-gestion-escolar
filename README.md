@@ -8,7 +8,6 @@ EDUCA es una plataforma web y Android para centralizar la gestión académica y 
 - [Arquitectura y mantenimiento](docs/ARQUITECTURA.md): estructura, datos, autenticación, permisos, migraciones y seguridad.
 - [API del servidor](docs/API.md): catálogo de rutas y criterios de acceso.
 - [Configuración y despliegue](docs/OPERACION.md): desarrollo local, variables, Railway, correo, notificaciones y APK Android.
-- [Sincronización de calificaciones de Google Forms](docs/google-forms-sync.md): configuración de Apps Script, clave segura y requisitos de la evaluación.
 - [Plantilla de contrato SaaS](docs/legal/contrato-saas-plantilla.md).
 
 ## Inicio local rápido

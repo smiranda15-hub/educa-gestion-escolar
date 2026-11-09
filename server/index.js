@@ -370,78 +370,33 @@ const sessionCookie = (token, maxAge) => `educa_session=${token}; Path=/; HttpOn
 const safeUser = user => ({ id: user.id, email: user.email, name: user.full_name, role: user.role, school: { id: user.school_id, name: user.school_name, slug: user.school_slug, primaryColor: user.school_primary_color || '#6c70df', hasLogo: Boolean(user.school_logo_content_type), contactEmail: user.school_contact_email || '', contactPhone: user.school_contact_phone || '', address: user.school_address || '' } })
 const legalTermsVersion = '2026-11-03-v1'
 
+function parseOnlineQuestionConfig(question) {
+  let saved
+  try { saved = JSON.parse(question.optionsJson || '[]') } catch { saved = [] }
+  // Las preguntas antiguas guardaban únicamente el arreglo de opciones.
+  if (Array.isArray(saved)) return { type: 'single', options: saved, correctOptions: [Number(question.correctOption)] }
+  const type = ['single', 'multiple', 'short', 'paragraph'].includes(saved?.type) ? saved.type : 'single'
+  return { type, options: Array.isArray(saved?.options) ? saved.options : [],
+    correctOptions: Array.isArray(saved?.correctOptions) ? saved.correctOptions : [Number(question.correctOption)],
+    expectedAnswer: typeof saved?.expectedAnswer === 'string' ? saved.expectedAnswer : '' }
+}
+
+function isValidOnlineAnswer(question, answer) {
+  const config = parseOnlineQuestionConfig(question)
+  if (config.type === 'single') return Number.isInteger(answer) && answer >= 0 && answer < config.options.length
+  if (config.type === 'multiple') return Array.isArray(answer) && answer.length > 0 && answer.length <= config.options.length &&
+    answer.every(value => Number.isInteger(value) && value >= 0 && value < config.options.length) && new Set(answer).size === answer.length
+  return typeof answer === 'string' && answer.trim().length > 0 && answer.length <= 5000
+}
+
+function normalizedShortAnswer(value) { return String(value || '').trim().toLocaleLowerCase('es') }
+
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
   const method = request.method || 'GET'
-  const googleFormsWebhook = method === 'POST' && url.pathname === '/api/integrations/google-forms/webhook'
-  if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !googleFormsWebhook && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
+  if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
-  if (googleFormsWebhook) {
-    const configuredSecret = String(process.env.EDUCA_FORMS_WEBHOOK_SECRET || '')
-    const suppliedSecret = String(request.headers['x-educa-forms-key'] || '')
-    if (!configuredSecret || !suppliedSecret || !timingSafeEqual(createHash('sha256').update(suppliedSecret).digest(), createHash('sha256').update(configuredSecret).digest())) return json(response, 401, { error: 'Credencial de integración no válida.' })
-    const body = await readBody(request)
-    const formUrl = String(body.formUrl || '').trim()
-    const responseId = String(body.responseId || '').trim()
-    const respondentEmail = String(body.respondentEmail || '').trim().toLowerCase()
-    const sourceScore = Number(body.score)
-    const sourceMaxScore = Number(body.maxScore)
-    const submittedAt = String(body.submittedAt || '').trim()
-    const submittedTime = Date.parse(submittedAt)
-    if (!formUrl || formUrl.length > 1000 || !validGoogleFormsUrl(formUrl) || !responseId || responseId.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(respondentEmail) || !Number.isFinite(sourceScore) || !Number.isFinite(sourceMaxScore) || sourceMaxScore <= 0 || sourceScore < 0 || sourceScore > sourceMaxScore || !Number.isFinite(submittedTime)) return json(response, 400, { error: 'La respuesta del formulario está incompleta o no es válida.' })
-    const matches = await db.all(`SELECT a.id, a.school_id AS "schoolId", a.course_id AS "courseId", a.subject, a.title,
-        a.max_score AS "maxScore", a.created_by AS "createdBy", c.grade, c.academic_year AS "academicYear"
-      FROM grade_assessments a JOIN courses c ON c.id = a.course_id
-      WHERE a.external_form_url = ? AND a.activity_type = 'assignment' AND a.is_published = 1 AND c.is_active = 1`, formUrl)
-    if (!matches.length) return json(response, 404, { error: 'No hay una actividad publicada en EDUCA con este enlace de Google Forms.' })
-    if (matches.length !== 1) return json(response, 409, { error: 'Este enlace está asociado a más de una actividad. Usa un enlace único por evaluación.' })
-    const assessment = matches[0]
-    const student = await db.get(`SELECT st.id, st.full_name AS name FROM users u
-      JOIN user_students us ON us.user_id = u.id AND us.relationship = 'estudiante'
-      JOIN students st ON st.id = us.student_id AND st.school_id = u.school_id
-      WHERE u.school_id = ? AND u.role = 'estudiante' AND u.is_active = 1 AND u.deleted_at IS NULL
-        AND LOWER(u.email) = ? AND st.status = 'Activo'`, assessment.schoolId, respondentEmail)
-    if (!student) return json(response, 404, { error: 'No encontramos una cuenta de estudiante activa con el correo que respondió el formulario.' })
-    const enrolled = await db.get(`SELECT st.id FROM students st WHERE st.id = ? AND st.school_id = ? AND st.status = 'Activo'
-      AND (EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = st.school_id AND se.student_id = st.id
-        AND se.course_id = ? AND se.academic_year = ? AND se.status = 'Activa')
-        OR (st.grade = ? AND NOT EXISTS (SELECT 1 FROM student_enrollments se
-          WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`,
-      student.id, assessment.schoolId, assessment.courseId, assessment.academicYear, assessment.grade)
-    if (!enrolled) return json(response, 403, { error: 'El estudiante no está matriculado en el curso de esta evaluación.' })
-    const score = Math.round((sourceScore / sourceMaxScore) * Number(assessment.maxScore) * 100) / 100
-    const syncedAt = new Date().toISOString()
-    let outcome = 'synced'
-    await db.transaction(async tx => {
-      const existingResponse = await tx.get('SELECT submitted_at AS "submittedAt" FROM google_form_grade_sync WHERE assessment_id = ? AND response_id = ?', assessment.id, responseId)
-      const latestOtherResponse = await tx.get(`SELECT response_id AS "responseId", submitted_at AS "submittedAt" FROM google_form_grade_sync
-        WHERE assessment_id = ? AND student_id = ? AND response_id <> ? ORDER BY submitted_at DESC LIMIT 1`, assessment.id, student.id, responseId)
-      if (!existingResponse && latestOtherResponse && Date.parse(latestOtherResponse.submittedAt) > submittedTime) {
-        outcome = 'older_response_ignored'
-        return
-      }
-      if (existingResponse && Date.parse(existingResponse.submittedAt) > submittedTime) {
-        outcome = 'older_response_ignored'
-        return
-      }
-      await tx.run(`INSERT INTO google_form_grade_sync (assessment_id, response_id, school_id, student_id, submitted_at, source_score, source_max_score, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(assessment_id, response_id) DO UPDATE SET student_id = excluded.student_id, submitted_at = excluded.submitted_at,
-          source_score = excluded.source_score, source_max_score = excluded.source_max_score, synced_at = excluded.synced_at`,
-        assessment.id, responseId, assessment.schoolId, student.id, new Date(submittedTime).toISOString(), sourceScore, sourceMaxScore, syncedAt)
-      await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at, grade_source)
-        VALUES (?, ?, ?, ?, ?, ?, 'google_forms')
-        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment,
-          updated_by = excluded.updated_by, updated_at = excluded.updated_at, grade_source = 'google_forms'
-        WHERE student_grades.grade_source = 'google_forms'`, assessment.id, student.id, score,
-        'Calificación sincronizada desde Google Forms', assessment.createdBy, syncedAt)
-      const grade = await tx.get('SELECT grade_source AS source FROM student_grades WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
-      if (grade?.source === 'manual') outcome = 'manual_grade_preserved'
-    })
-    if (outcome === 'synced') await logAudit(assessment.schoolId, null, 'google_forms_grade_synced')
-    return json(response, 200, { received: true, outcome })
-  }
   const staffCardVerificationMatch = url.pathname.match(/^\/api\/public\/staff-card\/([0-9a-f-]{36})$/i)
   if (method === 'GET' && staffCardVerificationMatch) {
     const record = await db.get(`SELECT p.id, p.full_name AS "staffName", p.position_title AS "positionTitle", p.is_active AS "isActive",
@@ -2598,7 +2553,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!assignment) return json(response, 403, { error: 'No tienes asignada esa asignatura en el curso.' })
     if (!['file', 'online'].includes(deliveryMode) || !['assignment', 'class_activity'].includes(activityType) || (activityType === 'class_activity' && (deliveryMode !== 'file' || externalFormUrl || questions.length || images.length)) || subject.length > 80 || period.length < 2 || period.length > 40 || title.length < 2 || title.length > 120 || instructions.length > 2000 || externalFormUrl.length > 1000 || videoUrl.length > 1000 || (dueAt && !validDate(dueAt)) || !validGoogleFormsUrl(externalFormUrl) || !validYouTubeUrl(videoUrl) || (timeLimitMinutes !== null && (!Number.isInteger(timeLimitMinutes) || timeLimitMinutes < 1 || timeLimitMinutes > 300)) || !['auto', 'manual'].includes(gradingMode) || !Number.isFinite(weightPercent) || weightPercent <= 0 || weightPercent > 100 || !Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 10000) return json(response, 400, { error: 'Revisa el tipo de registro, periodo, nombre, instrucciones, enlace, fecha, ponderación, tiempo y puntaje máximo.' })
     const effectiveTimeLimit = deliveryMode === 'online' ? timeLimitMinutes : null
-    const effectiveGradingMode = deliveryMode === 'online' ? gradingMode : 'auto'
+    const requiresManualQuestion = questions.some(question => question?.type === 'paragraph' || (question?.type === 'short' && !String(question?.expectedAnswer || '').trim()))
+    const effectiveGradingMode = deliveryMode === 'online' ? (requiresManualQuestion ? 'manual' : gradingMode) : 'auto'
     if (images.length > 5) return json(response, 400, { error: 'Puedes adjuntar hasta 5 imágenes por actividad.' })
     const imageRecords = []
     let imageTotalBytes = 0
@@ -2617,9 +2573,13 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (deliveryMode === 'online' && (!questions.length || questions.length > 50 || questions.some(question => {
       if (!question || typeof question !== 'object') return true
       const prompt = String(question.prompt || '').trim()
+      const type = ['single', 'multiple', 'short', 'paragraph'].includes(question.type) ? question.type : 'single'
       const options = Array.isArray(question.options) ? question.options.map(option => String(option).trim()) : []
+      const correctOptions = type === 'multiple' ? (Array.isArray(question.correctOptions) ? question.correctOptions : []) : [Number(question.correctOption)]
       const points = Number(question.points)
-      return prompt.length < 3 || prompt.length > 500 || options.length < 2 || options.length > 5 || options.some(option => option.length < 1 || option.length > 120) || (gradingMode === 'auto' && (!Number.isInteger(question.correctOption) || question.correctOption < 0 || question.correctOption >= options.length)) || !Number.isFinite(points) || points <= 0 || points > 1000
+      const optionsInvalid = ['single', 'multiple'].includes(type) && (options.length < 2 || options.length > 10 || options.some(option => option.length < 1 || option.length > 120))
+      const correctInvalid = effectiveGradingMode === 'auto' && (type === 'single' && (!Number.isInteger(question.correctOption) || question.correctOption < 0 || question.correctOption >= options.length) || type === 'multiple' && (!correctOptions.length || correctOptions.some(value => !Number.isInteger(value) || value < 0 || value >= options.length) || new Set(correctOptions).size !== correctOptions.length) || type === 'short' && !String(question.expectedAnswer || '').trim() || type === 'paragraph')
+      return prompt.length < 3 || prompt.length > 500 || optionsInvalid || (['short', 'paragraph'].includes(type) && String(question.expectedAnswer || '').length > 300) || correctInvalid || !Number.isFinite(points) || points <= 0 || points > 1000
     }) || Math.abs(questions.reduce((total, question) => total + Number(question.points), 0) - maxScore) > 0.001)) return json(response, 400, { error: 'La evaluación en línea requiere 1 a 50 preguntas válidas; el puntaje máximo debe coincidir con la suma de sus preguntas.' })
     if (deliveryMode === 'file' && questions.length) return json(response, 400, { error: 'Los trabajos con archivo no deben incluir preguntas en línea.' })
     const id = randomUUID()
@@ -2627,7 +2587,11 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       await tx.run('INSERT INTO grade_assessments (id, school_id, course_id, subject, period, title, instructions, due_at, delivery_mode, activity_type, integrity_monitoring, is_published, external_form_url, video_url, time_limit_minutes, grading_mode, weight_percent, max_score, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course.id, subject, period, title, instructions, dueAt || null, deliveryMode, activityType, integrityMonitoring, isPublished, externalFormUrl || null, videoUrl || null, effectiveTimeLimit, effectiveGradingMode, weightPercent, maxScore, user.id)
       for (let index = 0; index < questions.length; index++) {
         const question = questions[index]
-        await tx.run('INSERT INTO online_assessment_questions (id, assessment_id, question_no, prompt, options_json, correct_option, points) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), id, index + 1, String(question.prompt).trim(), JSON.stringify(question.options.map(option => String(option).trim())), Number(question.correctOption), Number(question.points))
+        const type = ['single', 'multiple', 'short', 'paragraph'].includes(question.type) ? question.type : 'single'
+        const options = Array.isArray(question.options) ? question.options.map(option => String(option).trim()) : []
+        const correctOptions = type === 'multiple' ? (Array.isArray(question.correctOptions) ? question.correctOptions : []) : [Number(question.correctOption || 0)]
+        const questionConfig = { type, options, correctOptions, expectedAnswer: String(question.expectedAnswer || '').trim() }
+        await tx.run('INSERT INTO online_assessment_questions (id, assessment_id, question_no, prompt, options_json, correct_option, points) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), id, index + 1, String(question.prompt).trim(), JSON.stringify(questionConfig), Number(correctOptions[0] || 0), Number(question.points))
       }
       for (const image of imageRecords) await tx.run('INSERT INTO assessment_images (id, school_id, assessment_id, file_name, content_type, file_size, file_data, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', image.id, user.school_id, id, image.fileName, image.contentType, image.fileSize, image.fileData, user.id)
     })
@@ -2670,11 +2634,12 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       try { answers = JSON.parse(attempt?.answersJson || '{}') } catch {}
       return { ...student, score: student.score === null ? null : Number(student.score), onlineSubmittedAt: attempt?.submittedAt || null,
         onlineAnswers: attempt ? questions.map(question => {
-          let options = []
-          try { options = JSON.parse(question.optionsJson) } catch {}
-          const selectedOption = Number.isInteger(answers[question.id]) ? answers[question.id] : null
-          return { questionNo: Number(question.questionNo), prompt: question.prompt, points: Number(question.points), selectedOption,
-            selectedAnswer: selectedOption === null ? null : options[selectedOption] ?? null }
+          const config = parseOnlineQuestionConfig(question)
+          const selected = answers[question.id]
+          const selectedAnswer = config.type === 'multiple' && Array.isArray(selected) ? selected.map(index => config.options[index]).filter(Boolean).join(', ')
+            : config.type === 'single' && Number.isInteger(selected) ? config.options[selected] ?? null
+              : typeof selected === 'string' ? selected : null
+          return { questionNo: Number(question.questionNo), prompt: question.prompt, points: Number(question.points), selectedAnswer }
         }) : [] }
     }) })
   }
@@ -2778,9 +2743,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           WHERE se.school_id = st.school_id AND se.student_id = st.id AND se.status = 'Activa')))`,
       record.studentId, user.school_id, assessment.courseId, assessment.academicYear, assessment.grade)) return json(response, 400, { error: 'Uno de los estudiantes no pertenece a este curso activo.' })
     await db.transaction(async tx => {
-      for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at, grade_source)
-        VALUES (?, ?, ?, ?, ?, ?, 'manual')
-        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at, grade_source = 'manual'`,
+      for (const record of records) await tx.run(`INSERT INTO student_grades (assessment_id, student_id, score, comment, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(assessment_id, student_id) DO UPDATE SET score = excluded.score, comment = excluded.comment, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
         assessment.id, record.studentId, record.score, record.comment, user.id, new Date().toISOString())
     })
     await logAudit(user.school_id, user.id, 'grade_records_saved')
@@ -3075,7 +3040,15 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const remainingSeconds = target => timeLimitMinutes ? Math.max(0, Math.ceil((Date.parse(target.startedAt) + timeLimitMinutes * 60_000 - Date.now()) / 1000)) : null
     const gradeAnswers = answers => {
       let result = 0
-      for (const question of questions) if (answers?.[question.id] === Number(question.correctOption)) result += Number(question.points)
+      for (const question of questions) {
+        const config = parseOnlineQuestionConfig(question)
+        const answer = answers?.[question.id]
+        const correct = (config.type === 'single' && answer === Number(config.correctOptions[0])) ||
+          (config.type === 'multiple' && Array.isArray(answer) && answer.length === config.correctOptions.length &&
+            [...answer].sort((a, b) => a - b).every((value, index) => value === [...config.correctOptions].sort((a, b) => a - b)[index])) ||
+          (config.type === 'short' && Boolean(config.expectedAnswer.trim()) && normalizedShortAnswer(answer) === normalizedShortAnswer(config.expectedAnswer))
+        if (correct) result += Number(question.points)
+      }
       return Number(result.toFixed(2))
     }
     const finalizeExpiredAttempt = async (target, latestAnswers = null) => {
@@ -3111,16 +3084,18 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       return json(response, 200, { status: 'started', attemptId: attempt.id, title: assessment.title, subject: assessment.subject, monitoringEnabled: Boolean(assessment.integrityMonitoring),
         timeLimitMinutes: timeLimitMinutes || null, timeRemainingSeconds: remainingSeconds(attempt), gradingMode: assessment.gradingMode,
         answers: JSON.parse(attempt.answersJson || '{}'),
-        maxScore: Number(assessment.maxScore), questions: questions.map(question => ({ id: question.id, questionNo: question.questionNo,
-          prompt: question.prompt, options: JSON.parse(question.optionsJson), points: Number(question.points) })) })
+        maxScore: Number(assessment.maxScore), questions: questions.map(question => {
+          const config = parseOnlineQuestionConfig(question)
+          return { id: question.id, questionNo: question.questionNo, prompt: question.prompt, type: config.type,
+            options: config.options, points: Number(question.points) }
+        }) })
     }
     if (onlineAssessmentAction[2] === 'draft') {
       const answers = body.answers
       const questionById = new Map(questions.map(question => [question.id, question]))
       if (!answers || typeof answers !== 'object' || Array.isArray(answers) || Object.keys(answers).some(id => {
         const question = questionById.get(id)
-        const options = question && JSON.parse(question.optionsJson)
-        return !question || !Number.isInteger(answers[id]) || answers[id] < 0 || answers[id] >= options.length
+        return !question || !isValidOnlineAnswer(question, answers[id])
       })) return json(response, 400, { error: 'Una o más respuestas no son válidas.' })
       const attempt = await db.get('SELECT id, started_at AS "startedAt", submitted_at AS "submittedAt", score, answers_json AS "answersJson" FROM online_assessment_attempts WHERE assessment_id = ? AND student_id = ?', assessment.id, student.id)
       if (!attempt || attempt.submittedAt) return json(response, 409, { error: 'No hay un intento abierto para guardar respuestas.' })
@@ -3133,11 +3108,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const expired = await finalizeExpiredAttempt(attempt)
     if (expired) return json(response, 200, expired)
     const answers = body.answers
-    if (!answers || typeof answers !== 'object' || Array.isArray(answers) || Object.keys(answers).length !== questions.length || questions.some(question => {
-      const selected = answers[question.id]
-      const options = JSON.parse(question.optionsJson)
-      return !Number.isInteger(selected) || selected < 0 || selected >= options.length
-    })) return json(response, 400, { error: 'Responde todas las preguntas antes de enviar.' })
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers) || Object.keys(answers).length !== questions.length || questions.some(question => !isValidOnlineAnswer(question, answers[question.id]))) return json(response, 400, { error: 'Responde todas las preguntas antes de enviar.' })
     const score = assessment.gradingMode === 'manual' ? null : gradeAnswers(answers)
     const submittedAt = new Date().toISOString()
     await db.transaction(async tx => {

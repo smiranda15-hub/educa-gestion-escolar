@@ -118,7 +118,6 @@ Los permisos se validan en el servidor. Personal autorizado puede comunicarse de
 | `PATCH /grades/assessments/:id/publication`, `PATCH /grades/assessments/:id/weight` | Publicación y ponderación. |
 | `GET /grades/assessments/:id/submissions`, `DELETE /grades/submissions/:id`, `GET /grades/submissions/:id/file` | Revisión, archivo y eliminación de entregas dentro de permisos. |
 | `POST /grades/assessments/:id/scores` | Guarda notas de estudiantes asignados. |
-| `POST /integrations/google-forms/webhook` | Recibe una nota calificada de Forms con `X-Educa-Forms-Key`; identifica la institución por el enlace exacto de una actividad publicada, vincula al estudiante por su correo y matrícula y conserva notas ingresadas manualmente. |
 | `GET /grades/rule`, `PUT /grades/rule` | Escalas/reglas institucionales por alcance académico. |
 | `GET /grades/report-card/options`, `GET /grades/report-card` | Opciones e información del boletín. |
 | `PUT /grades/publications` | Publica/retira periodos de boletín para roles autorizados. |
