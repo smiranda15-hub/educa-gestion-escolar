@@ -1107,3 +1107,77 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .school-home-contact-actions>button{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;color:#fff;font:650 11px 'DM Sans',sans-serif;cursor:pointer;white-space:nowrap}
 .school-home-contact-actions>button:hover{text-decoration:underline;text-underline-offset:3px}
 @media(max-width:760px){.school-home-contact-actions{gap:9px}.school-home-contact-actions>button{font-size:9px}.school-home-contact-actions>button svg{width:12px;height:12px}}
+
+/* Portada EDUCA: soluciones escolares organizadas por áreas */
+.institution-marketing-nav{gap:clamp(14px,2vw,28px)}
+.institution-marketing-benefits{padding:58px 0 36px}
+.institution-marketing-section-heading{text-align:center;max-width:760px;margin-inline:auto}
+.institution-marketing-section-heading h2{font-size:clamp(28px,3.3vw,40px);letter-spacing:-.035em}
+.institution-marketing-feature-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:34px}
+.institution-marketing-feature-grid article{min-height:225px;padding:25px 24px 21px;border-radius:18px;background:linear-gradient(180deg,#fff,#fcfdfd)}
+.institution-marketing-feature-grid article>span{width:44px;height:44px;border-radius:13px}
+.institution-marketing-feature-grid h3{margin:18px 0 8px;font-size:17px;letter-spacing:-.02em}
+.institution-marketing-feature-grid p{font-size:13px;line-height:1.7}
+.institution-marketing-feature-grid article>small{padding-top:17px;font-size:10px;letter-spacing:.02em}
+.institution-marketing-platform-note{display:flex;align-items:center;gap:17px;margin:22px 0 56px;padding:20px 23px;border:1px solid #d9e7e8;border-radius:17px;background:linear-gradient(100deg,#eaf5f3,#f3f4fb)}
+.institution-marketing-platform-note>span{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;border-radius:13px;background:#fff;color:#16877e}
+.institution-marketing-platform-note>div{flex:1;min-width:0}
+.institution-marketing-platform-note strong{color:#1d3c53;font-size:14px}
+.institution-marketing-platform-note p{margin:4px 0 0;color:#586f80;font-size:12px;line-height:1.6}
+.institution-marketing-platform-note>a{display:inline-flex;align-items:center;gap:7px;flex:none;color:#286b83;font-size:12px;font-weight:750;text-decoration:none}
+.institution-marketing-platform-note>a:hover{color:#147c78}
+@media(max-width:1000px){.institution-marketing-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.institution-marketing-feature-grid article{min-height:205px}}
+@media(max-width:700px){.institution-marketing-platform-note{align-items:flex-start;flex-wrap:wrap;margin-bottom:38px;padding:16px}.institution-marketing-platform-note>div{flex-basis:calc(100% - 64px)}.institution-marketing-platform-note>a{margin-left:61px}}
+@media(max-width:560px){.institution-marketing-benefits{padding:36px 0 24px}.institution-marketing-feature-grid{grid-template-columns:1fr;gap:11px;margin-top:22px}.institution-marketing-feature-grid article{min-height:0;padding:18px}.institution-marketing-feature-grid article>span{width:40px;height:40px}.institution-marketing-feature-grid h3{margin:12px 0 6px;font-size:15px}.institution-marketing-feature-grid article>small{padding-top:10px}.institution-marketing-platform-note strong{font-size:13px}.institution-marketing-platform-note p{font-size:11px}}
+
+/* Identidad visual y legibilidad específicas de la Institución Educativa Caldas. */
+.login-page.login-school-caldas,
+.school-home-caldas{
+  --institution-accent:#176b45 !important;
+  --school-ink:#153c30;
+  --school-muted:#586f64;
+}
+.login-page.login-school-caldas .login-intro h1{
+  max-width:540px;
+  font-size:clamp(36px,4.3vw,52px);
+  line-height:1.08;
+  letter-spacing:-1.8px;
+  color:#173b30;
+}
+.login-page.login-school-caldas .login-intro h1 span{color:#247a53}
+.login-page.login-school-caldas .login-intro>p{max-width:440px;color:#52695f}
+.login-page.login-school-caldas .login-overline{color:#176b45}
+.login-page.login-school-caldas .login-overline .live-dot{background:#2c9b70}
+.login-page.login-school-caldas .login-card-icon{color:#176b45;background:#e8f4ec}
+.login-page.login-school-caldas .login-benefits article>span{color:#176b45;background:#e8f4ec}
+.login-page.login-school-caldas .login-submit{background:#176b45;color:#fff;box-shadow:0 6px 16px #176b4530}
+.login-page.login-school-caldas .login-submit:hover{background:#105638}
+.login-page.login-school-caldas .login-card{border-color:#d9e7df}
+.login-page.login-school-caldas .login-selected-institution{border-color:#d7e6dc;background:#f4f8f5}
+.login-page.login-school-caldas .login-selected-institution strong{color:#173b30}
+.login-page.login-school-caldas .login-selected-institution button{color:#176b45;border-color:#cbded1}
+.login-page.login-school-caldas .login-school-photo{border-color:#cddfd3}
+.school-home-caldas{background:#f4f8f5;color:#173b30}
+.school-home-caldas .school-home-contact-bar{background:#124b35}
+.school-home-caldas .school-home-header{border-color:#dbe7df;box-shadow:0 12px 30px #173b3518}
+.school-home-caldas .institution-home-identity{flex:0 1 410px;min-width:0}
+.school-home-caldas .institution-home-identity>strong{max-width:none;overflow:visible;color:#173b30;font-size:clamp(14px,1.25vw,18px);letter-spacing:-.35px;text-overflow:clip;white-space:normal}
+.school-home-caldas .school-home-nav>a{color:#35594a}
+.school-home-caldas .school-home-nav>a:hover,.school-home-caldas .school-home-nav>a[aria-current="page"]{color:#176b45}
+.school-home-caldas .school-home-portal-button{background:#176b45;color:#fff}
+.school-home-caldas .school-home-hero{background:linear-gradient(120deg,#163d30,#246348 62%,#6e914c)}
+.school-home-caldas .school-home-hero h1{max-width:730px;font-size:clamp(36px,5vw,62px);letter-spacing:-1.8px}
+.school-home-caldas .school-home-primary-action{background:#176b45;color:#fff}
+.school-home-caldas .school-home-primary-action:hover,.school-home-caldas .school-home-portal-button:hover{background:#105638;filter:none}
+.school-home-caldas .school-home-trust svg{color:#f0c66d}
+@media(max-width:1050px){
+  .school-home-caldas .school-home-header{flex-wrap:wrap;gap:12px;padding-block:14px}
+  .school-home-caldas .institution-home-identity{flex:1 1 100%;max-width:100%}
+  .school-home-caldas .school-home-nav{order:3;flex:1 1 100%;justify-content:flex-start;flex-wrap:wrap}
+}
+@media(max-width:700px){
+  .login-page.login-school-caldas .login-intro h1{font-size:clamp(32px,8vw,42px);letter-spacing:-1.2px}
+  .school-home-caldas .school-home-header{margin-inline:12px;padding-inline:14px}
+  .school-home-caldas .institution-home-identity>strong{font-size:15px}
+  .school-home-caldas .school-home-hero h1{font-size:clamp(34px,9vw,48px);letter-spacing:-1.1px}
+}
