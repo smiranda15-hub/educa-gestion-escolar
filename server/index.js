@@ -267,7 +267,10 @@ async function getPushMessaging() {
   })()
   return pushMessagingPromise
 }
-async function sendPushNotifications(schoolId, recipientIds, title, body, category = 'general', eventId = '') {
+function notificationTargetModule(category) {
+  return ({ password_reset: 'Solicitudes de contraseña', attendance: 'Justificaciones', calendar: 'Calendario', communication: 'Comunicaciones', message: 'Mensajería', certificate: 'Certificados y constancias', report_card: 'Boletines' })[category] || 'Notificaciones'
+}
+async function sendPushNotifications(schoolId, recipientIds, title, body, category = 'general', eventId = '', targetId = eventId) {
   const uniqueRecipients = [...new Set(recipientIds.filter(Boolean))]
   if (!uniqueRecipients.length || !process.env.FIREBASE_SERVICE_ACCOUNT_JSON) return { sent: 0, registered: 0, configured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) }
   try {
@@ -280,7 +283,7 @@ async function sendPushNotifications(schoolId, recipientIds, title, body, catego
       const result = await messaging.sendEachForMulticast({
         tokens: batch.map(item => item.token),
         notification: { title: String(title).slice(0, 120), body: String(body).slice(0, 240) },
-        data: { category: String(category), eventId: String(eventId || ''), destination: 'notifications' },
+        data: { category: String(category), eventId: String(eventId || ''), targetModule: notificationTargetModule(category), targetId: String(targetId || ''), destination: notificationTargetModule(category) },
         android: { priority: 'high', notification: { channelId: 'educa_notifications', sound: 'default' } },
       })
       sent += result.successCount
@@ -469,8 +472,8 @@ async function route(request, response) {
         const reviewers = await tx.all(`SELECT id, email FROM users WHERE school_id = ? AND role IN ('admin','rectoria','coordinacion','secretaria')
           AND is_active = 1 AND deleted_at IS NULL`, account.schoolId)
         reviewerIds = reviewers.map(reviewer => reviewer.id)
-        for (const reviewer of reviewers) await tx.run(`INSERT INTO user_notifications (id, school_id, user_id, title, body, category)
-          VALUES (?, ?, ?, ?, ?, ?)`, randomUUID(), account.schoolId, reviewer.id, 'Solicitud de recuperación de contraseña', `${account.fullName} · Revisa la solicitud en Solicitudes de contraseña.`, 'password_reset')
+        for (const reviewer of reviewers) await tx.run(`INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, randomUUID(), account.schoolId, reviewer.id, 'Solicitud de recuperación de contraseña', `${account.fullName} · Revisa la solicitud en Solicitudes de contraseña.`, 'password_reset', 'Solicitudes de contraseña', id)
         await tx.run('INSERT INTO audit_log (school_id, actor_user_id, action) VALUES (?, NULL, ?)', account.schoolId, 'password_reset_requested')
       })
       await sendPushNotifications(account.schoolId, reviewerIds, 'Solicitud de recuperación de contraseña', 'Hay una solicitud pendiente en el panel de soporte.', 'password_reset', id)
@@ -1043,7 +1046,7 @@ async function route(request, response) {
   }
 
   if (url.pathname === '/api/notifications' && method === 'GET') {
-    const rows = await db.all(`SELECT id, title, body, category, event_id AS "eventId", created_at AS "createdAt", read_at AS "readAt"
+    const rows = await db.all(`SELECT id, title, body, category, event_id AS "eventId", target_module AS "targetModule", target_id AS "targetId", created_at AS "createdAt", read_at AS "readAt"
       FROM user_notifications WHERE school_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50`, user.school_id, user.id)
     return json(response, 200, { notifications: rows, unread: rows.filter(row => !row.readAt).length })
   }
@@ -1157,6 +1160,7 @@ async function route(request, response) {
   if (url.pathname === '/api/calendar' && method === 'GET') {
     const from = String(url.searchParams.get('from') || '')
     const to = String(url.searchParams.get('to') || '')
+    const eventId = String(url.searchParams.get('eventId') || '').trim()
     if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) return json(response, 400, { error: 'El rango de fechas no es válido.' })
     let sql = `SELECT e.id, e.title, e.details, e.event_date AS "eventDate", e.start_time AS "startTime", e.end_time AS "endTime",
       e.event_type AS "eventType", e.course_id AS "courseId", c.name AS "courseName", c.grade, c.academic_year AS "academicYear",
@@ -1164,6 +1168,7 @@ async function route(request, response) {
       FROM school_events e LEFT JOIN courses c ON c.id = e.course_id JOIN users creator ON creator.id = e.created_by
       WHERE e.school_id = ?`
     const params = [user.school_id]
+    if (eventId) { sql += ' AND e.id = ?'; params.push(eventId) }
     if (from) { sql += ' AND e.event_date >= ?'; params.push(from) }
     if (to) { sql += ' AND e.event_date <= ?'; params.push(to) }
     if (user.role === 'docente') { sql += ` AND (e.course_id IS NULL OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = e.course_id AND ct.user_id = ?))`; params.push(user.id) }
@@ -1214,10 +1219,10 @@ async function route(request, response) {
     }
     await db.transaction(async tx => {
       await tx.run('INSERT INTO school_events (id, school_id, course_id, title, details, event_date, start_time, end_time, event_type, registration_capacity, registration_deadline, registration_open, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, course?.id || null, title, details, eventDate, startTime, endTime, eventType, registrationCapacity, registrationDeadline, registrationOpen ? 1 : 0, user.id)
-      for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, event_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient, id, `Nuevo evento: ${title}`, `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ''}`, 'calendar')
+      for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, event_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient, id, `Nuevo evento: ${title}`, `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ''}`, 'calendar', 'Calendario', id)
     })
     const eventNoticeBody = `${eventDate}${startTime ? ` · ${startTime}` : ''}${course ? ` · ${course.name}` : ' · Todo el colegio'}`
-    const pushResult = await sendPushNotifications(user.school_id, recipients, `Nuevo evento: ${title}`, eventNoticeBody, 'calendar', id)
+    const pushResult = await sendPushNotifications(user.school_id, recipients, `Nuevo evento: ${title}`, eventNoticeBody, 'calendar', id, id)
     const emailResult = await sendEmailToUsers(user.school_id, recipients, `EDUCA: nuevo evento · ${title}`, `Se publicó un evento escolar.\n\n${title}\nFecha: ${eventNoticeBody}\n\nIngresa a EDUCA para consultar los detalles y cualquier actualización.`)
     await logAudit(user.school_id, user.id, 'calendar_event_created')
     return json(response, 201, { event: { id, title, eventDate, courseId: course?.id || null }, notified: recipients.length, pushNotified: pushResult.sent, pushRegistered: pushResult.registered, pushConfigured: pushResult.configured, pushFailed: Boolean(pushResult.failed), emailNotified: emailResult.sent, emailConfigured: emailResult.configured, emailFailed: Boolean(emailResult.failed) })
@@ -1337,8 +1342,8 @@ async function route(request, response) {
       id, user.school_id, studentId, date, reason, user.id, supportFile?.fileName || null, supportFile?.mime || null, supportFile?.data.length || 0, supportFile?.data || null) }
     catch (error) { if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'Ya hay una justificación registrada para ese estudiante y fecha.' }); throw error }
     const reviewers = await db.all("SELECT id FROM users WHERE school_id = ? AND is_active = 1 AND deleted_at IS NULL AND role IN ('admin','rectoria','coordinacion','secretaria')", user.school_id)
-    for (const reviewer of reviewers) await db.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, reviewer.id, 'Nueva justificación de ausencia', `${linked.name} · ${date}`, 'attendance')
-    await sendPushNotifications(user.school_id, reviewers.map(item => item.id), 'Nueva justificación de ausencia', 'Hay una solicitud pendiente para revisar en EDUCA.', 'attendance')
+    for (const reviewer of reviewers) await db.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, reviewer.id, 'Nueva justificación de ausencia', `${linked.name} · ${date}`, 'attendance', 'Justificaciones', id)
+    await sendPushNotifications(user.school_id, reviewers.map(item => item.id), 'Nueva justificación de ausencia', 'Hay una solicitud pendiente para revisar en EDUCA.', 'attendance', '', id)
     await sendEmailToUsers(user.school_id, reviewers.map(item => item.id), 'Nueva justificación pendiente', `El acudiente ${user.full_name} envió una justificación para ${linked.name}.\nFecha de ausencia: ${date}.\nIngresa a EDUCA para revisar el motivo y el soporte adjunto.`)
     await sendEmailToUsers(user.school_id, [user.id], 'Recibimos tu justificación', `La justificación para ${linked.name} del ${date} quedó registrada y pendiente de revisión.\nTe enviaremos otro correo cuando rectoría o administración actualice su estado.`)
     await logAudit(user.school_id, user.id, 'attendance_justification_created')
@@ -1370,9 +1375,9 @@ async function route(request, response) {
     await db.transaction(async tx => {
       await tx.run('UPDATE attendance_justifications SET status = ?, reviewer_note = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', status, note, user.id, item.id, user.school_id)
       if (status === 'Aprobada') await tx.run("UPDATE attendance_records SET status = 'Justificado', marked_by = ?, marked_at = CURRENT_TIMESTAMP WHERE school_id = ? AND student_id = ? AND attendance_date = ? AND status = 'Ausente'", user.id, user.school_id, item.studentId, item.date)
-      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, item.createdBy, `Justificación ${status.toLocaleLowerCase('es')}`, `${item.date}${note ? ` · ${note}` : ''}`, 'attendance')
+      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, item.createdBy, `Justificación ${status.toLocaleLowerCase('es')}`, `${item.date}${note ? ` · ${note}` : ''}`, 'attendance', 'Justificaciones', item.id)
     })
-    await sendPushNotifications(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar la respuesta.', 'attendance')
+    await sendPushNotifications(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar la respuesta.', 'attendance', '', item.id)
     await sendEmailToUsers(user.school_id, [item.createdBy], `Justificación ${status.toLocaleLowerCase('es')}`, `La justificación de ${item.studentName} para el ${item.date} fue ${status.toLocaleLowerCase('es')}.${note ? `\nObservación: ${note}` : ''}\nIngresa a EDUCA para consultar el registro completo.`)
     await logAudit(user.school_id, user.id, 'attendance_justification_reviewed')
     return json(response, 200, { updated: true })
@@ -1522,7 +1527,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       await tx.run('INSERT INTO communications (id, school_id, course_id, audience, title, body, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)', id, user.school_id, audience === 'course' ? course.id : null, audience, title, content, user.id)
       for (const recipient of recipientUsers) {
         await tx.run('INSERT INTO communication_recipients (communication_id, user_id) VALUES (?, ?)', id, recipient.id)
-        await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, `Nuevo comunicado: ${title}`, content.slice(0, 220), 'communication')
+        await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, `Nuevo comunicado: ${title}`, content.slice(0, 220), 'communication', 'Comunicaciones', id)
       }
     })
     await sendPushNotifications(user.school_id, recipientUsers.map(item => item.id), `Nuevo comunicado: ${title}`, 'Abre EDUCA para leer el mensaje.', 'communication', id)
@@ -1634,7 +1639,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const conversationId = threadId || randomUUID()
     await db.transaction(async tx => {
       await tx.run('INSERT INTO direct_messages (id, thread_id, school_id, sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), conversationId, user.school_id, user.id, recipientId, subject, content)
-      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipientId, `Nuevo mensaje de ${senderName}`, 'Abre Mensajería en EDUCA para leerlo.', 'message')
+      await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipientId, `Nuevo mensaje de ${senderName}`, 'Abre Mensajería en EDUCA para leerlo.', 'message', 'Mensajería', conversationId)
     })
     await sendPushNotifications(user.school_id, [recipientId], `Nuevo mensaje de ${senderName}`, 'Abre EDUCA para leer tu mensaje privado.', 'message', conversationId)
     await logAudit(user.school_id, user.id, `direct_message_sent:${conversationId}`)
@@ -2006,8 +2011,8 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const id = randomUUID()
     await db.run(`INSERT INTO school_certificate_requests (id, school_id, student_id, enrollment_id, course_id, grade_snapshot, course_name_snapshot, academic_status_snapshot, certificate_type, academic_year, requested_by, requester_role, replaces_certificate_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, user.school_id, studentId, academicRecord?.enrollmentId || null, academicRecord?.courseId || null, gradeSnapshot, courseNameSnapshot, academicRecord?.status || 'Registro actual', type, academicYear, user.id, user.role, replacesId || null)
-    for (const rector of rectors) await db.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, rector.id, 'Solicitud de constancia pendiente', `${student.name} · ${type}`, 'certificate')
-    await sendPushNotifications(user.school_id, rectors.map(item => item.id), 'Solicitud de constancia pendiente', 'Hay un documento escolar pendiente para revisión en EDUCA.', 'certificate', id)
+    for (const rector of rectors) await db.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, rector.id, 'Solicitud de constancia pendiente', `${student.name} · ${type}`, 'certificate', 'Certificados y constancias', id)
+    await sendPushNotifications(user.school_id, rectors.map(item => item.id), 'Solicitud de constancia pendiente', 'Hay un documento escolar pendiente para revisión en EDUCA.', 'certificate', id, id)
     await sendEmailToUsers(user.school_id, rectors.map(item => item.id), 'Solicitud de documento escolar pendiente', `Hay una solicitud de ${type} para ${student.name}.\nGrado: ${gradeSnapshot}${courseNameSnapshot ? ` · ${courseNameSnapshot}` : ''}. Año lectivo: ${academicYear}.\nIngresa a EDUCA para revisar y aprobar o rechazar la solicitud.`)
     await sendEmailToUsers(user.school_id, [user.id], 'Recibimos tu solicitud de documento', `Tu solicitud de ${type} para ${student.name} quedó registrada y pendiente de revisión por rectoría.\nGrado: ${gradeSnapshot}${courseNameSnapshot ? ` · ${courseNameSnapshot}` : ''} · Año lectivo: ${academicYear}.`)
     await logAudit(user.school_id, user.id, 'certificate_request_created')
@@ -2068,7 +2073,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           }
           await tx.run('UPDATE school_certificate_requests SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ? AND school_id = ?', decision, note, user.id, new Date().toISOString(), id, user.school_id)
           const recipient = await tx.get('SELECT requested_by FROM school_certificate_requests WHERE id = ?', id)
-          await tx.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, recipient.requested_by, `Solicitud ${decision.toLocaleLowerCase('es')}`, note || 'La constancia fue aprobada y quedó disponible.', 'certificate')
+          await tx.run("INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module, target_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", randomUUID(), user.school_id, recipient.requested_by, `Solicitud ${decision.toLocaleLowerCase('es')}`, note || 'La constancia fue aprobada y quedó disponible.', 'certificate', 'Certificados y constancias', certificateId || id)
         })
       } catch (error) { if (error.status) return json(response, error.status, { error: error.message }); throw error }
       await sendPushNotifications(user.school_id, [requestRow.requested_by], `Solicitud ${decision.toLocaleLowerCase('es')}`, 'Ingresa a EDUCA para consultar el resultado.', 'certificate', issuedCertificate?.id || id)
@@ -2820,7 +2825,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       const notificationTitle = 'Boletines disponibles'
       const notificationBody = `${period} · Año lectivo ${academicYearStart(academicYear)}. Ya puedes consultar el boletín en EDUCA.`
       await db.transaction(async tx => {
-        for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category) VALUES (?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card')
+        for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card', 'Boletines')
       })
       const pushResult = await sendPushNotifications(user.school_id, recipients.map(item => item.id), notificationTitle, notificationBody, 'report_card')
       const emailResult = await sendEmailToUsers(user.school_id, recipients.map(item => item.id), 'EDUCA: boletines disponibles', `${notificationTitle}\n\n${notificationBody}\n\nIngresa a EDUCA para consultar el documento oficial.`)

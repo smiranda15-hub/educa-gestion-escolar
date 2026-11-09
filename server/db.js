@@ -865,6 +865,15 @@ export async function migrate() {
     // La migración 26 ya no crea almacenamiento para sincronizar Google Forms.
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 26)
   }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 27)) {
+    const notificationColumns = usePostgres
+      ? await db.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'user_notifications'")
+      : await db.all('PRAGMA table_info(user_notifications)')
+    const names = new Set(notificationColumns.map(column => column.name))
+    if (!names.has('target_module')) await db.exec('ALTER TABLE user_notifications ADD COLUMN target_module TEXT')
+    if (!names.has('target_id')) await db.exec('ALTER TABLE user_notifications ADD COLUMN target_id TEXT')
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 27)
+  }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)

@@ -1181,3 +1181,6 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
   .school-home-caldas .institution-home-identity>strong{font-size:15px}
   .school-home-caldas .school-home-hero h1{font-size:clamp(34px,9vw,48px);letter-spacing:-1.1px}
 }
+
+.notification-focus-target{position:relative;z-index:1;outline:3px solid color-mix(in srgb,var(--school-primary,#286b83) 55%,transparent);outline-offset:4px;animation:notification-focus-pulse 2.6s ease-out;border-radius:12px}
+@keyframes notification-focus-pulse{0%,35%{box-shadow:0 0 0 8px color-mix(in srgb,var(--school-primary,#286b83) 18%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
