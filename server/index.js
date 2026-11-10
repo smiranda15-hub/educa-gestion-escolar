@@ -3692,6 +3692,19 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     return json(response, 201, { id, documentNumber, status: 'Solicitada' })
   }
   const enrollmentRequestMatch = url.pathname.match(/^\/api\/enrollments\/([0-9a-f-]{36})$/i)
+  if (enrollmentRequestMatch && method === 'DELETE') {
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para eliminar solicitudes de matrícula.' })
+    const id = enrollmentRequestMatch[1]
+    const requestRecord = await db.get('SELECT id, status FROM enrollment_requests WHERE id = ? AND school_id = ?', id, user.school_id)
+    if (!requestRecord) return json(response, 404, { error: 'No encontramos esa solicitud en este colegio.' })
+    if (requestRecord.status === 'Aprobada') return json(response, 409, { error: 'Una matrícula aprobada no se puede eliminar. Registra un retiro o traslado para conservar la trayectoria académica.' })
+    await db.transaction(async tx => {
+      await tx.run("UPDATE document_control_registry SET status = 'Eliminada' WHERE school_id = ? AND document_type = 'SOLMAT' AND reference_id = ?", user.school_id, id)
+      await tx.run('DELETE FROM enrollment_requests WHERE id = ? AND school_id = ? AND status <> ?', id, user.school_id, 'Aprobada')
+    })
+    await logAudit(user.school_id, user.id, 'enrollment_request_deleted')
+    return json(response, 200, { id, deleted: true })
+  }
   if (enrollmentRequestMatch && method === 'PATCH') {
     if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'No tienes permiso para procesar matrículas.' })
     const id = enrollmentRequestMatch[1]
