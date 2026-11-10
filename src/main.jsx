@@ -2274,7 +2274,24 @@ function App() {
     try {
       const response = await fetch(`/api/enrollments/${request.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ status, pendingDocuments: request.pendingDocuments, notes: request.notes }) })
       const result = await response.json()
-      if (!response.ok) return setEnrollmentError(result.error || 'No se pudo actualizar la solicitud.')
+      if (!response.ok) {
+        // Si el servidor terminó la aprobación pero falló al responder, confirma el estado persistido antes de mostrar error.
+        if (status === 'Aprobada') {
+          try {
+            const check = await fetch(`/api/enrollments?${new URLSearchParams({ search: enrollmentSearch, status: 'Todos' })}`, { credentials: 'same-origin' })
+            const latest = await check.json()
+            const persisted = (latest.requests || []).find(item => item.id === request.id)
+            if (check.ok && persisted?.status === 'Aprobada') {
+              setEnrollmentRequests(latest.requests || [])
+              await loadEnrollmentHistory(); await loadStudents()
+              notify('La matrícula quedó aprobada y el estudiante está registrado. Actualiza la lista para consultar su folio y certificado.')
+              return
+            }
+          } catch { /* Se muestra el error original si no se pudo confirmar el estado. */ }
+        }
+        setEnrollmentError(result.error || 'No se pudo actualizar la solicitud.')
+        return
+      }
       await loadEnrollmentRequests(); if (status === 'Aprobada') { await loadEnrollmentHistory(); await loadStudents() }
       notify(status === 'Aprobada' ? `Matrícula aprobada desde ${result.effectiveDate || 'la fecha de aprobación'}. Folio: ${result.documentNumber || 'registrado'} · Certificado: ${result.certificateNumber || 'emitido'}.` : 'Estado de matrícula actualizado.')
     } catch { setEnrollmentError('No se pudo conectar con el servidor.') }

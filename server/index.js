@@ -3698,9 +3698,15 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const requestRecord = await db.get(`SELECT * FROM enrollment_requests WHERE id = ? AND school_id = ?`, id, user.school_id)
     if (!requestRecord) return json(response, 404, { error: 'No encontramos esa solicitud en este colegio.' })
     if (requestRecord.status === 'Aprobada') {
-      const existingEnrollment = await db.get(`SELECT id, document_number AS "documentNumber" FROM student_enrollments WHERE school_id = ? AND student_id = ? AND LEFT(academic_year, 4) = ? AND status = 'Activa' ORDER BY start_date DESC LIMIT 1`, user.school_id, requestRecord.student_id, academicYearStart(requestRecord.academic_year))
+      // Recupera aprobaciones anteriores que quedaron sin student_id enlazado.
+      const linkedStudent = requestRecord.student_id
+        ? { id: requestRecord.student_id }
+        : await db.get('SELECT id FROM students WHERE school_id = ? AND document = ?', user.school_id, requestRecord.document)
+      const studentId = linkedStudent?.id || null
+      const existingEnrollment = studentId ? await db.get(`SELECT id, document_number AS "documentNumber" FROM student_enrollments WHERE school_id = ? AND student_id = ? AND LEFT(academic_year, 4) = ? AND status = 'Activa' ORDER BY start_date DESC LIMIT 1`, user.school_id, studentId, academicYearStart(requestRecord.academic_year)) : null
       const existingCertificate = existingEnrollment ? await db.get(`SELECT certificate_number AS "certificateNumber" FROM school_certificates WHERE school_id = ? AND enrollment_id = ? AND certificate_type = 'Constancia de matrícula' AND status = 'Emitida' ORDER BY created_at DESC LIMIT 1`, user.school_id, existingEnrollment.id) : null
-      return json(response, 200, { id, studentId: requestRecord.student_id, enrollmentId: existingEnrollment?.id || null, documentNumber: existingEnrollment?.documentNumber || null, certificateNumber: existingCertificate?.certificateNumber || null, certificateGenerated: Boolean(existingCertificate), status: 'Aprobada', alreadyApproved: true })
+      if (studentId && !requestRecord.student_id) await db.run('UPDATE enrollment_requests SET student_id = ? WHERE id = ? AND school_id = ? AND student_id IS NULL', studentId, id, user.school_id)
+      return json(response, 200, { id, studentId, enrollmentId: existingEnrollment?.id || null, documentNumber: existingEnrollment?.documentNumber || null, certificateNumber: existingCertificate?.certificateNumber || null, certificateGenerated: Boolean(existingCertificate), status: 'Aprobada', alreadyApproved: true })
     }
     const body = await readBody(request)
     const statuses = new Set(['Solicitada', 'En revisión', 'Pendiente documentos', 'Aprobada', 'Rechazada'])
