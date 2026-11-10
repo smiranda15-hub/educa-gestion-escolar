@@ -1022,8 +1022,9 @@ async function route(request, response) {
   const documentControlMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})$/i)
   if (documentControlMatch && method === 'DELETE') {
     if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden borrar registros anulados del control documental.' })
-    const record = await db.get('SELECT document_number AS "documentNumber", status FROM document_control_registry WHERE id = ? AND school_id = ?', documentControlMatch[1], user.school_id)
+    const record = await db.get('SELECT document_number AS "documentNumber", document_type AS "documentType", status FROM document_control_registry WHERE id = ? AND school_id = ?', documentControlMatch[1], user.school_id)
     if (!record) return json(response, 404, { error: 'No encontramos ese registro documental en este colegio.' })
+    if (record.documentType === 'PERS') return json(response, 403, { error: 'Las constancias de personal solo se eliminan definitivamente desde Personal institucional, firmas y constancias, con una cuenta de administrador.' })
     if (record.status !== 'Anulada') return json(response, 409, { error: 'Solo se pueden borrar registros cuyo documento ya esté anulado.' })
     const deleted = await db.run("DELETE FROM document_control_registry WHERE id = ? AND school_id = ? AND status = 'Anulada'", documentControlMatch[1], user.school_id)
     if (!deleted.changes && !deleted.rowCount) return json(response, 409, { error: 'El registro cambió de estado y no se pudo borrar.' })
@@ -2575,6 +2576,18 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const records = await db.all(`SELECT c.id, c.document_number AS "documentNumber", c.certificate_type AS "certificateType", c.academic_year AS "academicYear", c.issuer_name AS "issuerName", c.issuer_title AS "issuerTitle", c.signature_snapshot AS "signatureSnapshot", c.status, c.created_at AS "createdAt", p.id AS "staffId", p.full_name AS "staffName", p.national_id AS "nationalId", p.position_title AS "positionTitle", p.department
       FROM staff_certifications c JOIN institutional_staff p ON p.id = c.staff_id WHERE c.school_id = ? ORDER BY c.created_at DESC LIMIT 200`, user.school_id)
     return json(response, 200, { records: records.map(record => { let signature = null; try { signature = record.signatureSnapshot ? JSON.parse(record.signatureSnapshot) : null } catch {} return { ...record, issuerSignature: signature?.dataUrl || '' } }) })
+  }
+  const staffCertificationMatch = url.pathname.match(/^\/api\/institutional-staff\/certifications\/([0-9a-f-]{36})$/i)
+  if (staffCertificationMatch && method === 'DELETE') {
+    if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede eliminar definitivamente constancias de personal.' })
+    const certification = await db.get('SELECT id FROM staff_certifications WHERE id = ? AND school_id = ?', staffCertificationMatch[1], user.school_id)
+    if (!certification) return json(response, 404, { error: 'No encontramos esa constancia de personal.' })
+    await db.transaction(async tx => {
+      await tx.run("DELETE FROM document_control_registry WHERE school_id = ? AND document_type = 'PERS' AND reference_id = ?", user.school_id, certification.id)
+      await tx.run('DELETE FROM staff_certifications WHERE id = ? AND school_id = ?', certification.id, user.school_id)
+    })
+    await logAudit(user.school_id, user.id, 'staff_certification_deleted')
+    return json(response, 200, { deleted: true })
   }
   if (url.pathname === '/api/institutional-staff/certifications' && method === 'POST') {
     const body = await readBody(request), staffId = String(body.staffId || ''), certificateType = String(body.certificateType || '').trim()
