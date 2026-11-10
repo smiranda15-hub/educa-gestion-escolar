@@ -1330,3 +1330,23 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .institution-home-page.school-home :is(h1,h2,h3,button,a,p,span,strong,small,select,input,textarea,figcaption){font-family:var(--institution-font,Manrope),sans-serif}
 @media(max-width:500px){.school-site-event-list>article{grid-template-columns:42px minmax(0,1fr)}.school-site-event-actions{grid-column:2}.school-site-event-actions .button{min-height:36px;padding:7px 9px}}
 
+.report-card-student-grid{grid-template-columns:1.4fr 1.25fr 1fr 1fr .95fr}
+@media(max-width:680px){.report-card-student-grid{grid-template-columns:1fr 1fr}}
+@media print{.report-card-student-grid{grid-template-columns:1.35fr 1.2fr 1fr 1fr .95fr}}
+/* Documento fuente abierto desde Control documental */
+.document-source-overlay{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:24px;background:rgba(15,35,52,.58);backdrop-filter:blur(5px)}
+.document-source-dialog{width:min(820px,100%);max-height:min(88dvh,900px);overflow:auto;background:#fff;border:1px solid #d8e3ec;border-radius:20px;box-shadow:0 28px 80px rgba(19,48,72,.24);padding:28px;color:#17344a}
+.document-source-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #e3ebf0}
+.document-source-close{flex:none;border:1px solid #d8e3ec;background:#fff;color:#526b7f}
+.document-source-header h2{margin:10px 0 5px;font-size:1.55rem;color:#17344a}
+.document-source-header p{margin:0;color:#647b8d}
+.document-source-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:18px 0}
+.document-source-meta span{display:grid;gap:5px;padding:12px 14px;background:#f3f7f9;border:1px solid #e3ebf0;border-radius:12px;color:#25445c}
+.document-source-meta strong,.document-source-field span{font-size:.78rem;color:#6b8292}
+.document-source-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 22px;border-top:1px solid #e3ebf0}
+.document-source-field{display:grid;gap:5px;padding:13px 4px;border-bottom:1px solid #e8eef2;min-width:0}
+.document-source-field strong{white-space:pre-wrap;overflow-wrap:anywhere;font-weight:600;color:#17344a}
+.document-source-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:20px;color:#6b8292;font-size:.85rem}
+.document-source-actions{display:flex;gap:10px;flex:none}
+@media(max-width:640px){.document-source-overlay{padding:10px;align-items:end}.document-source-dialog{max-height:92dvh;border-radius:18px;padding:20px}.document-source-meta{grid-template-columns:1fr}.document-source-fields{grid-template-columns:1fr}.document-source-footer{align-items:stretch;flex-direction:column}.document-source-actions{display:grid;grid-template-columns:1fr 1fr}.document-source-actions .button{justify-content:center}}
+@media print{body:has(.document-source-overlay) *{visibility:hidden!important}body:has(.document-source-overlay) .document-source-overlay,body:has(.document-source-overlay) .document-source-overlay *{visibility:visible!important}.document-source-overlay{position:fixed;inset:0;display:block;padding:0;background:#fff!important;backdrop-filter:none}.document-source-dialog{width:100%;max-width:none;max-height:none;overflow:visible;padding:12mm;border:0;border-radius:0;box-shadow:none}.document-source-actions,.document-source-header .icon-button,.document-source-header .document-source-close{display:none!important}.document-source-header h2{font-size:20pt}.document-source-field{break-inside:avoid}}

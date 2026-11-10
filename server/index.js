@@ -997,6 +997,11 @@ async function route(request, response) {
     const search = `%${String(url.searchParams.get('search') || '').trim().slice(0, 100)}%`
     const clauses = ['d.school_id = ?'], params = [user.school_id]
     if (['CERT', 'BOL', 'MAT', 'SOLMAT', 'PERS'].includes(type)) { clauses.push('d.document_type = ?'); params.push(type) }
+    clauses.push(`(d.document_type <> 'BOL' OR EXISTS (
+      SELECT 1 FROM grade_period_publications pub
+      WHERE pub.school_id = d.school_id AND pub.academic_year = d.academic_year
+        AND pub.period = d.period AND pub.is_published = 1
+    ))`)
     if (year && academicYearStart(year)) { clauses.push("LEFT(d.academic_year, 4) = ?"); params.push(academicYearStart(year)) }
     if (search !== '%%') { clauses.push('(d.document_number LIKE ? OR d.student_name LIKE ? OR d.status LIKE ?)'); params.push(search, search, search) }
     const where = clauses.join(' AND ')
@@ -1018,6 +1023,42 @@ async function route(request, response) {
     }
     const records = await db.all(`${selectRecords} LIMIT ? OFFSET ?`, ...params, limit, offset)
     return json(response, 200, { records, total, limit, offset })
+  }
+  const documentSourceMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})\/source$/i)
+  if (documentSourceMatch && method === 'GET') {
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar el archivo documental.' })
+    const record = await db.get(`SELECT d.id, d.school_id AS "schoolId", d.document_type AS "documentType", d.document_number AS "documentNumber", d.reference_id AS "referenceId", d.student_id AS "studentId", d.student_name AS "studentName", d.academic_year AS "academicYear", d.period, d.status, d.created_at AS "createdAt", COALESCE(u.full_name, 'Cuenta eliminada') AS "createdByName", s.name AS "schoolName"
+      FROM document_control_registry d JOIN schools s ON s.id = d.school_id LEFT JOIN users u ON u.id = d.created_by AND u.school_id = d.school_id WHERE d.id = ? AND d.school_id = ?`, documentSourceMatch[1], user.school_id)
+    if (!record) return json(response, 404, { error: 'No encontramos ese folio en el archivo de esta institución.' })
+    const sourceId = record.referenceId
+    let source = null
+    if (sourceId && record.documentType === 'SOLMAT') source = await db.get(`SELECT e.id, e.document_number AS "requestNumber", e.student_name AS "studentName", e.document, e.grade_requested AS grade, e.academic_year AS "academicYear", e.guardian_name AS "guardianName", e.guardian_phone AS "guardianPhone", e.guardian_email AS "guardianEmail", e.pending_documents AS "pendingDocuments", e.notes, e.status, e.created_at AS "createdAt", e.updated_at AS "updatedAt", COALESCE(u.full_name, 'Cuenta eliminada') AS "createdByName"
+      FROM enrollment_requests e LEFT JOIN users u ON u.id = e.created_by AND u.school_id = e.school_id WHERE e.id = ? AND e.school_id = ?`, sourceId, user.school_id)
+    if (sourceId && record.documentType === 'MAT') source = await db.get(`SELECT e.id, e.document_number AS "enrollmentNumber", st.full_name AS "studentName", st.document_type AS "studentDocumentType", st.document AS "studentDocument", st.document_issued_place AS "documentIssuedPlace", c.grade, c.name AS "courseName", e.academic_year AS "academicYear", e.status, e.start_date AS "startDate", e.end_date AS "endDate", e.notes, e.created_at AS "createdAt", COALESCE(u.full_name, 'Cuenta eliminada') AS "createdByName"
+      FROM student_enrollments e JOIN students st ON st.id = e.student_id AND st.school_id = e.school_id LEFT JOIN courses c ON c.id = e.course_id AND c.school_id = e.school_id LEFT JOIN users u ON u.id = e.created_by AND u.school_id = e.school_id WHERE e.id = ? AND e.school_id = ?`, sourceId, user.school_id)
+    if (sourceId && record.documentType === 'PERS') source = await db.get(`SELECT c.id, c.document_number AS "documentNumber", c.certificate_type AS "certificateType", c.academic_year AS "academicYear", c.status, c.issuer_name AS "issuerName", c.issuer_title AS "issuerTitle", c.created_at AS "createdAt", p.full_name AS "staffName", p.national_id AS "staffDocument", p.position_title AS "positionTitle", p.department, p.email, p.phone
+      FROM staff_certifications c JOIN institutional_staff p ON p.id = c.staff_id AND p.school_id = c.school_id WHERE c.id = ? AND c.school_id = ?`, sourceId, user.school_id)
+    if (sourceId && record.documentType === 'CERT') source = await db.get(`SELECT c.id, c.certificate_number AS "certificateNumber", c.certificate_type AS "certificateType", c.document_number AS "documentNumber", c.student_name AS "studentName", c.student_document_type AS "studentDocumentType", c.student_document_number AS "studentDocumentNumber", c.student_document_issued_place AS "documentIssuedPlace", c.grade_snapshot AS grade, c.course_name_snapshot AS "courseName", c.academic_year AS "academicYear", c.academic_status_snapshot AS "academicStatus", c.requester_name AS "requesterName", c.requester_role AS "requesterRole", c.rector_name AS "rectorName", c.signed_at AS "signedAt", c.status, c.created_at AS "createdAt", c.annul_note AS "annulNote"
+      FROM school_certificates c WHERE c.id = ? AND c.school_id = ?`, sourceId, user.school_id)
+    if (sourceId && record.documentType === 'BOL') source = await db.get(`SELECT r.token, r.student_id AS "studentId", st.full_name AS "studentName", st.document_type AS "studentDocumentType", st.document AS "studentDocument", st.document_issued_place AS "documentIssuedPlace", r.academic_year AS "academicYear", r.period, r.document_number AS "documentNumber", r.signature_snapshot AS "signatureSnapshot", r.created_at AS "createdAt", COALESCE(p.is_published, 0) AS "isPublished", c.grade, c.name AS "courseName"
+      FROM report_card_verifications r JOIN students st ON st.id = r.student_id AND st.school_id = r.school_id LEFT JOIN student_enrollments se ON se.school_id = r.school_id AND se.student_id = r.student_id AND se.academic_year = r.academic_year AND se.status = 'Activa' LEFT JOIN courses c ON c.id = se.course_id AND c.school_id = r.school_id LEFT JOIN grade_period_publications p ON p.school_id = r.school_id AND p.academic_year = r.academic_year AND p.period = r.period WHERE r.token = ? AND r.school_id = ?`, sourceId, user.school_id)
+    if (record.documentType === 'BOL' && !source?.isPublished) return json(response, 404, { error: 'El boletín todavía no ha sido publicado y no forma parte del archivo documental.' })
+    if (sourceId && record.documentType === 'CERT' && !source) source = await db.get(`SELECT id, student_name AS "studentName", certificate_type AS "certificateType", grade_snapshot AS grade, course_name_snapshot AS "courseName", academic_year AS "academicYear", status, created_at AS "createdAt" FROM school_certificate_requests WHERE id = ? AND school_id = ?`, sourceId, user.school_id)
+    if (!source) return json(response, 404, { error: 'El registro fuente de este folio ya no está disponible. El número de control se conserva para trazabilidad.' })
+    let reportSignatures = []
+    if (record.documentType === 'BOL') {
+      try { reportSignatures = JSON.parse(source.signatureSnapshot || '[]') } catch { reportSignatures = [] }
+      if (!Array.isArray(reportSignatures)) reportSignatures = []
+    }
+    const fieldsByType = {
+      SOLMAT: [['Estudiante', source.studentName], ['Documento de identidad', source.document], ['Grado solicitado', source.grade], ['Año lectivo', source.academicYear], ['Acudiente', source.guardianName], ['Teléfono del acudiente', source.guardianPhone], ['Correo del acudiente', source.guardianEmail], ['Documentos pendientes', source.pendingDocuments], ['Observaciones', source.notes], ['Estado de solicitud', source.status], ['Registrado por', source.createdByName], ['Fecha de registro', source.createdAt], ['Última actualización', source.updatedAt]],
+      MAT: [['Estudiante', source.studentName], ['Identificación', [source.studentDocumentType, source.studentDocument, source.documentIssuedPlace].filter(Boolean).join(' · ')], ['Grado', source.grade], ['Curso', source.courseName], ['Año lectivo', source.academicYear], ['Estado de matrícula', source.status], ['Fecha efectiva', source.startDate], ['Fecha de retiro/traslado', source.endDate], ['Observaciones', source.notes], ['Registrado por', source.createdByName], ['Fecha de registro', source.createdAt]],
+      PERS: [['Funcionario', source.staffName], ['Identificación', source.staffDocument], ['Cargo', source.positionTitle], ['Dependencia', source.department], ['Correo institucional', source.email], ['Teléfono', source.phone], ['Tipo de constancia', source.certificateType], ['Año lectivo', source.academicYear], ['Expedida por', `${source.issuerName || ''}${source.issuerTitle ? ` · ${source.issuerTitle}` : ''}`], ['Estado', source.status], ['Fecha de expedición', source.createdAt]],
+      CERT: [['Estudiante', source.studentName], ['Tipo de documento', source.certificateType], ['Identificación', [source.studentDocumentType, source.studentDocumentNumber, source.documentIssuedPlace].filter(Boolean).join(' · ')], ['Grado', source.grade], ['Curso', source.courseName], ['Año lectivo', source.academicYear], ['Estado académico', source.academicStatus], ['Solicitó', `${source.requesterName || ''}${source.requesterRole ? ` · ${source.requesterRole}` : ''}`], ['Rectoría / firmante', source.rectorName], ['Fecha de firma', source.signedAt], ['Estado del documento', source.status], ['Nota de anulación', source.annulNote], ['Fecha de emisión/registro', source.createdAt]],
+      BOL: [['Estudiante', source.studentName], ['Identificación', [source.studentDocumentType, source.studentDocument, source.documentIssuedPlace].filter(Boolean).join(' · ')], ['Grado', source.grade], ['Curso', source.courseName], ['Año lectivo', source.academicYear], ['Periodo', source.period], ['Estado de publicación', Number(source.isPublished) ? 'Publicado' : 'Vista previa'], ['Firmas guardadas', reportSignatures.map(item => [item.name, item.title].filter(Boolean).join(' · ')).join('; ')], ['Fecha de generación', source.createdAt]],
+    }
+    const fields = (fieldsByType[record.documentType] || []).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '').map(([label, value]) => ({ label, value: String(value) }))
+    return json(response, 200, { sourceDocument: { ...record, fields, title: ({ SOLMAT: 'Solicitud de matrícula', MAT: 'Registro de matrícula', CERT: 'Certificado o constancia', BOL: 'Boletín académico', PERS: 'Constancia de personal' })[record.documentType] || 'Documento institucional' } })
   }
   const documentControlMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})$/i)
   if (documentControlMatch && method === 'DELETE') {
@@ -3242,6 +3283,32 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
       publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
     await db.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
       body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
+    if (body.published) {
+      await db.transaction(async tx => {
+        const students = await tx.all(`SELECT DISTINCT st.id AS "studentId", st.full_name AS "studentName"
+          FROM student_grades sg
+          JOIN students st ON st.id = sg.student_id AND st.school_id = ?
+          JOIN grade_assessments a ON a.id = sg.assessment_id AND a.school_id = st.school_id AND a.period = ?
+          JOIN courses c ON c.id = a.course_id AND c.school_id = st.school_id AND c.academic_year = ?
+          ORDER BY st.full_name`, user.school_id, period, academicYear)
+        for (const student of students) {
+          let record = await tx.get('SELECT token, document_number AS "documentNumber" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.studentId, academicYear, period)
+          if (!record) {
+            const token = randomUUID()
+            const documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
+            await tx.run(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period, document_number)
+              VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING`, token, user.school_id, student.studentId, academicYear, period, documentNumber)
+            record = await tx.get('SELECT token, document_number AS "documentNumber" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.studentId, academicYear, period)
+          }
+          if (!record.documentNumber) {
+            record.documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
+            await tx.run('UPDATE report_card_verifications SET document_number = ? WHERE token = ?', record.documentNumber, record.token)
+          }
+          await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber: record.documentNumber, referenceId: record.token, studentId: student.studentId, studentName: student.studentName, academicYear, period, status: 'Publicado', createdBy: user.id })
+          await tx.run("UPDATE document_control_registry SET status = 'Publicado' WHERE school_id = ? AND document_type = 'BOL' AND reference_id = ?", user.school_id, record.token)
+        }
+      })
+    }
     let notified = 0, emailNotified = 0, emailConfigured = isEmailConfigured()
     if (body.published && !previousPublication?.isPublished) {
       const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
@@ -3345,23 +3412,62 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         periods,
       }
     })
+    const groupDirector = reportCourse ? await db.get(`SELECT st.full_name AS "fullName", st.position_title AS "positionTitle"
+      FROM course_group_directors d JOIN institutional_staff st ON st.id = d.staff_id
+      WHERE d.course_id = ? AND d.school_id = ? AND st.is_active = 1`, reportCourse.id, user.school_id) : null
+    let classStanding = null
+    if (reportCourse) {
+      const classGradeRows = await db.all(`SELECT sg.student_id AS "studentId", a.subject,
+          SUM((sg.score / a.max_score * 100) * CASE WHEN a.weight_percent > 0 THEN a.weight_percent ELSE 100 END)
+            / SUM(CASE WHEN a.weight_percent > 0 THEN a.weight_percent ELSE 100 END) AS "subjectPercent"
+        FROM grade_assessments a
+        JOIN courses c ON c.id = a.course_id AND c.school_id = a.school_id
+        JOIN student_grades sg ON sg.assessment_id = a.id
+        JOIN students st ON st.id = sg.student_id AND st.school_id = a.school_id
+        WHERE a.school_id = ? AND c.id = ? AND c.academic_year = ? AND a.period = ?
+          AND a.max_score > 0 AND sg.score IS NOT NULL
+          AND (st.id = ? OR EXISTS (
+            SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id
+              AND se.student_id = st.id AND se.course_id = c.id
+              AND se.academic_year = c.academic_year AND se.status = 'Activa'
+          ))
+        GROUP BY sg.student_id, a.subject`, user.school_id, reportCourse.id, academicYear, period, student.id)
+      const subjectTotals = new Map()
+      for (const row of classGradeRows) {
+        if (!subjectTotals.has(row.studentId)) subjectTotals.set(row.studentId, [])
+        subjectTotals.get(row.studentId).push(Number(row.subjectPercent))
+      }
+      const standings = [...subjectTotals.entries()].map(([studentId, percentages]) => ({
+        studentId,
+        averagePercent: Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length * 100) / 100,
+      })).sort((a, b) => b.averagePercent - a.averagePercent)
+      const studentStanding = standings.find(item => item.studentId === student.id)
+      if (studentStanding) {
+        classStanding = {
+          position: standings.filter(item => item.averagePercent > studentStanding.averagePercent).length + 1,
+          totalStudents: standings.length,
+          averagePercent: studentStanding.averagePercent,
+        }
+      }
+    }
     const currentSignatures = await resolveDocumentSigners(user.school_id, 'report_card', reportCourse?.id || null)
     const verification = await db.transaction(async tx => {
       let record = await tx.get('SELECT token, document_number AS "documentNumber", signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
       if (!record) {
         const token = randomUUID()
         const documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
-        const inserted = await tx.get(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period, document_number)
+        await tx.get(`INSERT INTO report_card_verifications (token, school_id, student_id, academic_year, period, document_number)
           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(student_id, academic_year, period) DO NOTHING RETURNING token`, token, user.school_id, student.id, academicYear, period, documentNumber)
         record = await tx.get('SELECT token, document_number AS "documentNumber", signature_snapshot AS "signatureSnapshot" FROM report_card_verifications WHERE student_id = ? AND academic_year = ? AND period = ?', student.id, academicYear, period)
-        if (inserted) await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber, referenceId: token, studentId: student.id, studentName: student.name, academicYear, period, status: publication?.isPublished ? 'Publicado' : 'Vista previa', createdBy: user.id })
       }
       if (!record.documentNumber) {
         record.documentNumber = await nextDocumentNumber(tx, user.school_id, 'BOL', academicYear)
         await tx.run('UPDATE report_card_verifications SET document_number = ? WHERE token = ?', record.documentNumber, record.token)
-        await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber: record.documentNumber, referenceId: record.token, studentId: student.id, studentName: student.name, academicYear, period, status: publication?.isPublished ? 'Publicado' : 'Vista previa', createdBy: user.id })
       }
-      await tx.run('UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = \'BOL\' AND reference_id = ?', publication?.isPublished ? 'Publicado' : 'Vista previa', user.school_id, record.token)
+      if (publication?.isPublished) {
+        await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber: record.documentNumber, referenceId: record.token, studentId: student.id, studentName: student.name, academicYear, period, status: 'Publicado', createdBy: user.id })
+        await tx.run("UPDATE document_control_registry SET status = 'Publicado' WHERE school_id = ? AND document_type = 'BOL' AND reference_id = ?", user.school_id, record.token)
+      }
       return record
     })
     if ((!verification.signatureSnapshot || verification.signatureSnapshot === '[]') && currentSignatures.length) {
@@ -3372,7 +3478,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     try { reportSignatures = JSON.parse(verification.signatureSnapshot || '[]') } catch { reportSignatures = currentSignatures }
     const reportSchool = await db.get('SELECT name, slug, address, contact_email AS "contactEmail", contact_phone AS "contactPhone", primary_color AS "primaryColor", logo_content_type AS "hasLogo" FROM schools WHERE id = ?', user.school_id)
     await logAudit(user.school_id, user.id, 'report_card_viewed')
-    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, periods: reportPeriods, subjects, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, documentNumber: verification.documentNumber, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
+    return json(response, 200, { student: { ...student, grade: reportGrade, courseName: reportCourse?.courseName || '' }, academicYear, period, periods: reportPeriods, subjects, groupDirector, classStanding, signatures: reportSignatures, school: { ...reportSchool, hasLogo: Boolean(reportSchool.hasLogo) }, documentNumber: verification.documentNumber, verificationCode: verification.token, isPublished: Boolean(publication?.isPublished), generatedAt: new Date().toISOString() })
   }
   if (url.pathname === '/api/portal/assignments' && method === 'GET') {
     if (!['acudiente', 'estudiante'].includes(user.role)) return json(response, 403, { error: 'Este acceso es solo para estudiantes y acudientes.' })
