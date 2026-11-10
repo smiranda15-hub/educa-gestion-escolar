@@ -1001,7 +1001,11 @@ async function route(request, response) {
       SELECT 1 FROM grade_period_publications pub
       WHERE pub.school_id = d.school_id AND pub.academic_year = d.academic_year
         AND pub.period = d.period AND pub.is_published = 1
-    ))`)
+    ) OR (d.status = 'Retirado' AND EXISTS (
+      SELECT 1 FROM grade_period_publications pub
+      WHERE pub.school_id = d.school_id AND pub.academic_year = d.academic_year
+        AND pub.period = d.period AND pub.is_published = 0
+    )))`)
     if (year && academicYearStart(year)) { clauses.push("LEFT(d.academic_year, 4) = ?"); params.push(academicYearStart(year)) }
     if (search !== '%%') { clauses.push('(d.document_number LIKE ? OR d.student_name LIKE ? OR d.status LIKE ?)'); params.push(search, search, search) }
     const where = clauses.join(' AND ')
@@ -1063,9 +1067,24 @@ async function route(request, response) {
   const documentControlMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})$/i)
   if (documentControlMatch && method === 'DELETE') {
     if (!['admin', 'rectoria'].includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden borrar registros anulados del control documental.' })
-    const record = await db.get('SELECT document_number AS "documentNumber", document_type AS "documentType", status FROM document_control_registry WHERE id = ? AND school_id = ?', documentControlMatch[1], user.school_id)
+    const record = await db.get('SELECT document_number AS "documentNumber", document_type AS "documentType", status, reference_id AS "referenceId", academic_year AS "academicYear", period FROM document_control_registry WHERE id = ? AND school_id = ?', documentControlMatch[1], user.school_id)
     if (!record) return json(response, 404, { error: 'No encontramos ese registro documental en este colegio.' })
     if (record.documentType === 'PERS') return json(response, 403, { error: 'Las constancias de personal solo se eliminan definitivamente desde Personal institucional, firmas y constancias, con una cuenta de administrador.' })
+    if (record.documentType === 'BOL') {
+      if (record.status !== 'Retirado') return json(response, 409, { error: 'Primero retira del portal los boletines del periodo. Solo se puede eliminar un boletín retirado.' })
+      const deleted = await db.transaction(async tx => {
+        const publication = await tx.get('SELECT is_published AS "isPublished" FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND period = ?', user.school_id, record.academicYear, record.period)
+        if (publication?.isPublished) return false
+        const result = await tx.run("DELETE FROM document_control_registry WHERE id = ? AND school_id = ? AND document_type = 'BOL' AND status = 'Retirado'", documentControlMatch[1], user.school_id)
+        if (!result.changes && !result.rowCount) return false
+        await tx.run('DELETE FROM report_card_verifications WHERE token = ? AND school_id = ?', record.referenceId, user.school_id)
+        return true
+      })
+      if (!deleted) return json(response, 409, { error: 'El periodo volvió a publicarse o el boletín cambió. Actualiza el listado e inténtalo de nuevo.' })
+      try { await logAudit(user.school_id, user.id, `report_card_deleted:${record.documentNumber}`) }
+      catch (error) { console.error('EDUCA report-card deletion audit failed:', error.code || error.message || 'audit_error') }
+      return json(response, 200, { deleted: true, documentNumber: record.documentNumber, academicYear: record.academicYear, period: record.period })
+    }
     if (record.status !== 'Anulada') return json(response, 409, { error: 'Solo se pueden borrar registros cuyo documento ya esté anulado.' })
     const deleted = await db.run("DELETE FROM document_control_registry WHERE id = ? AND school_id = ? AND status = 'Anulada'", documentControlMatch[1], user.school_id)
     if (!deleted.changes && !deleted.rowCount) return json(response, 409, { error: 'El registro cambió de estado y no se pudo borrar.' })
