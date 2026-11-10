@@ -3273,18 +3273,20 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         WHERE a.school_id = ? AND c.school_id = ? AND c.academic_year = ? AND a.period = ?`, user.school_id, user.school_id, academicYear, period)).count)
       if (!grades) return json(response, 409, { error: 'No hay notas registradas para publicar en este año y periodo.' })
     }
-    const previousPublication = await db.get('SELECT is_published AS "isPublished" FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND period = ?', user.school_id, academicYear, period)
     const publishedAt = body.published ? new Date().toISOString() : null
     const publicationId = randomUUID()
-    await db.run(`INSERT INTO grade_period_publications (id, school_id, academic_year, period, is_published, published_by, published_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(school_id, academic_year, period) DO UPDATE SET is_published = excluded.is_published,
-        published_by = excluded.published_by, published_at = excluded.published_at`,
-      publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
-    await db.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
-      body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
-    if (body.published) {
-      await db.transaction(async tx => {
+    // La publicación y el registro documental se guardan juntos: así no queda
+    // un boletín a medio publicar si falla una operación de base de datos.
+    const previousPublication = await db.transaction(async tx => {
+      const previous = await tx.get('SELECT is_published AS "isPublished" FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND period = ?', user.school_id, academicYear, period)
+      await tx.run(`INSERT INTO grade_period_publications (id, school_id, academic_year, period, is_published, published_by, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(school_id, academic_year, period) DO UPDATE SET is_published = excluded.is_published,
+          published_by = excluded.published_by, published_at = excluded.published_at`,
+        publicationId, user.school_id, academicYear, period, body.published ? 1 : 0, user.id, publishedAt)
+      await tx.run("UPDATE document_control_registry SET status = ? WHERE school_id = ? AND document_type = 'BOL' AND academic_year = ? AND period = ?",
+        body.published ? 'Publicado' : 'Retirado', user.school_id, academicYear, period)
+      if (body.published) {
         const students = await tx.all(`SELECT DISTINCT st.id AS "studentId", st.full_name AS "studentName"
           FROM student_grades sg
           JOIN students st ON st.id = sg.student_id AND st.school_id = ?
@@ -3307,29 +3309,42 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
           await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'BOL', documentNumber: record.documentNumber, referenceId: record.token, studentId: student.studentId, studentName: student.studentName, academicYear, period, status: 'Publicado', createdBy: user.id })
           await tx.run("UPDATE document_control_registry SET status = 'Publicado' WHERE school_id = ? AND document_type = 'BOL' AND reference_id = ?", user.school_id, record.token)
         }
-      })
-    }
+      }
+      return previous
+    })
     let notified = 0, emailNotified = 0, emailConfigured = isEmailConfigured()
     if (body.published && !previousPublication?.isPublished) {
-      const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
-        JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
-        JOIN student_grades sg ON sg.student_id = st.id
-        JOIN grade_assessments a ON a.id = sg.assessment_id AND a.school_id = st.school_id AND a.period = ?
-        JOIN courses c ON c.id = a.course_id AND c.school_id = st.school_id AND c.academic_year = ?
-        JOIN users u ON u.id = us.user_id AND u.school_id = st.school_id AND u.is_active = 1 AND u.deleted_at IS NULL
-        WHERE us.school_id = ?`, user.school_id, period, academicYear, user.school_id)
-      const notificationTitle = 'Boletines disponibles'
-      const notificationBody = `${period} · Año lectivo ${academicYearStart(academicYear)}. Ya puedes consultar el boletín en EDUCA.`
-      await db.transaction(async tx => {
-        for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card', 'Boletines')
-      })
-      const pushResult = await sendPushNotifications(user.school_id, recipients.map(item => item.id), notificationTitle, notificationBody, 'report_card')
-      const emailResult = await sendEmailToUsers(user.school_id, recipients.map(item => item.id), 'EDUCA: boletines disponibles', `${notificationTitle}\n\n${notificationBody}\n\nIngresa a EDUCA para consultar el documento oficial.`)
-      notified = recipients.length
-      emailNotified = emailResult.sent; emailConfigured = emailResult.configured
-      await logAudit(user.school_id, user.id, `grade_period_families_notified:${pushResult.sent}`)
+      // Un fallo en avisos/correo no debe reportar como fallida una publicación
+      // que ya quedó guardada correctamente.
+      try {
+        const recipients = await db.all(`SELECT DISTINCT us.user_id AS id FROM user_students us
+          JOIN students st ON st.id = us.student_id AND st.school_id = ? AND st.status = 'Activo'
+          JOIN student_grades sg ON sg.student_id = st.id
+          JOIN grade_assessments a ON a.id = sg.assessment_id AND a.school_id = st.school_id AND a.period = ?
+          JOIN courses c ON c.id = a.course_id AND c.school_id = st.school_id AND c.academic_year = ?
+          JOIN users u ON u.id = us.user_id AND u.school_id = st.school_id AND u.is_active = 1 AND u.deleted_at IS NULL
+          WHERE us.school_id = ?`, user.school_id, period, academicYear, user.school_id)
+        const notificationTitle = 'Boletines disponibles'
+        const notificationBody = `${period} · Año lectivo ${academicYearStart(academicYear)}. Ya puedes consultar el boletín en EDUCA.`
+        await db.transaction(async tx => {
+          for (const recipient of recipients) await tx.run('INSERT INTO user_notifications (id, school_id, user_id, title, body, category, target_module) VALUES (?, ?, ?, ?, ?, ?, ?)', randomUUID(), user.school_id, recipient.id, notificationTitle, notificationBody, 'report_card', 'Boletines')
+        })
+        const pushResult = await sendPushNotifications(user.school_id, recipients.map(item => item.id), notificationTitle, notificationBody, 'report_card')
+        const emailResult = await sendEmailToUsers(user.school_id, recipients.map(item => item.id), 'EDUCA: boletines disponibles', `${notificationTitle}\n\n${notificationBody}\n\nIngresa a EDUCA para consultar el documento oficial.`)
+        notified = recipients.length
+        emailNotified = emailResult.sent; emailConfigured = emailResult.configured
+        await logAudit(user.school_id, user.id, `grade_period_families_notified:${pushResult.sent}`)
+      } catch (error) {
+        console.error('EDUCA report-card notification failed:', error.code || error.message || 'notification_error')
+      }
     }
-    await logAudit(user.school_id, user.id, body.published ? 'grade_period_published' : 'grade_period_unpublished')
+    // La publicación ya quedó confirmada en la base de datos. Un fallo aislado
+    // de auditoría no debe hacer que la interfaz informe que publicar falló.
+    try {
+      await logAudit(user.school_id, user.id, body.published ? 'grade_period_published' : 'grade_period_unpublished')
+    } catch (error) {
+      console.error('EDUCA report-card publication audit failed:', error.code || error.message || 'audit_error')
+    }
     return json(response, 200, { academicYear, period, isPublished: body.published, publishedAt, notified, emailNotified, emailConfigured })
   }
   if (url.pathname === '/api/grades/report-card' && method === 'GET') {
