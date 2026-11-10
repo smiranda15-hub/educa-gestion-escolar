@@ -500,6 +500,39 @@ export async function migrate() {
       updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
     );
     CREATE INDEX IF NOT EXISTS institutional_content_school_idx ON institutional_content(school_id, is_published, category, updated_at);
+    CREATE TABLE IF NOT EXISTS school_public_sites (
+      school_id TEXT PRIMARY KEY REFERENCES schools(id) ON DELETE CASCADE,
+      content_json TEXT NOT NULL DEFAULT '{}',
+      updated_by TEXT REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE TABLE IF NOT EXISTS school_site_photos (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      alt_text TEXT NOT NULL DEFAULT '',
+      content_type TEXT NOT NULL,
+      file_name TEXT NOT NULL DEFAULT '',
+      photo_data ${blobType} NOT NULL,
+      is_hero INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS school_site_photos_order_idx ON school_site_photos(school_id, sort_order, created_at);
+    CREATE TABLE IF NOT EXISTS school_site_events (
+      id TEXT PRIMARY KEY,
+      school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      event_date TEXT NOT NULL,
+      location TEXT NOT NULL DEFAULT '',
+      is_published INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+      updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
+    );
+    CREATE INDEX IF NOT EXISTS school_site_events_public_idx ON school_site_events(school_id, is_published, event_date);
     CREATE TABLE IF NOT EXISTS communication_recipients (
       communication_id TEXT NOT NULL REFERENCES communications(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

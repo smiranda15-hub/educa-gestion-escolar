@@ -532,6 +532,21 @@ async function route(request, response) {
     for (const school of schools) school.hasLogo = Boolean(school.logoContentType), delete school.logoContentType
     return json(response, 200, { schools })
   }
+  const publicSchoolSiteMatch = url.pathname.match(/^\/api\/public\/schools\/([a-z0-9-]{1,48})\/site$/i)
+  if (method === 'GET' && publicSchoolSiteMatch) {
+    const school = await db.get(`SELECT id, name, slug, contact_email AS "contactEmail", contact_phone AS "contactPhone", address, primary_color AS "primaryColor", logo_content_type AS "logoContentType"
+      FROM schools WHERE slug = ? AND is_active = 1 AND archived_at IS NULL`, publicSchoolSiteMatch[1].toLowerCase())
+    if (!school) return json(response, 404, { error: 'No encontramos el sitio de esta institución.' })
+    const saved = await db.get('SELECT content_json AS content FROM school_public_sites WHERE school_id = ?', school.id)
+    let content = {}
+    try { content = JSON.parse(saved?.content || '{}') } catch { content = {} }
+    const photos = await db.all(`SELECT id, title, alt_text AS "altText", content_type AS "contentType", photo_data AS "photoData", is_hero AS "isHero", sort_order AS "sortOrder"
+      FROM school_site_photos WHERE school_id = ? ORDER BY is_hero DESC, sort_order, created_at LIMIT 20`, school.id)
+    const events = await db.all(`SELECT id, title, details, event_date AS "eventDate", location FROM school_site_events
+      WHERE school_id = ? AND is_published = 1 AND event_date >= ? ORDER BY event_date LIMIT 8`, school.id, new Date().toISOString().slice(0, 10))
+    const publicPhotos = photos.map(photo => ({ id: photo.id, title: photo.title, altText: photo.altText, isHero: Boolean(photo.isHero), sortOrder: photo.sortOrder, url: `data:${photo.contentType};base64,${Buffer.from(photo.photoData).toString('base64')}` }))
+    return json(response, 200, { school: { ...school, hasLogo: Boolean(school.logoContentType) }, content, photos: publicPhotos, events })
+  }
   if (url.pathname === '/api/institutions' && method === 'GET') {
     const user = await getSession(request)
     if (!user || user.role !== 'admin' || user.email.toLowerCase() !== institutionManagerEmail) return json(response, 403, { error: 'No tienes permiso para administrar varias instituciones.' })
@@ -751,6 +766,82 @@ async function route(request, response) {
   }
   const user = await getSession(request)
   if (!user) return json(response, 401, { error: 'Inicia sesión para continuar.' })
+  const siteManagers = ['admin', 'rectoria']
+  if (url.pathname === '/api/school-site' && method === 'GET') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden editar el sitio institucional.' })
+    const saved = await db.get('SELECT content_json AS content FROM school_public_sites WHERE school_id = ?', user.school_id)
+    let content = {}
+    try { content = JSON.parse(saved?.content || '{}') } catch { content = {} }
+    const photos = await db.all(`SELECT id, title, alt_text AS "altText", content_type AS "contentType", photo_data AS "photoData", is_hero AS "isHero", sort_order AS "sortOrder"
+      FROM school_site_photos WHERE school_id = ? ORDER BY is_hero DESC, sort_order, created_at LIMIT 20`, user.school_id)
+    const events = await db.all(`SELECT id, title, details, event_date AS "eventDate", location, is_published AS "isPublished"
+      FROM school_site_events WHERE school_id = ? ORDER BY event_date DESC LIMIT 100`, user.school_id)
+    return json(response, 200, { content, photos: photos.map(photo => ({ id: photo.id, title: photo.title, altText: photo.altText, isHero: Boolean(photo.isHero), sortOrder: photo.sortOrder, url: `data:${photo.contentType};base64,${Buffer.from(photo.photoData).toString('base64')}` })), events: events.map(event => ({ ...event, isPublished: Boolean(event.isPublished) })) })
+  }
+  if (url.pathname === '/api/school-site' && method === 'PUT') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden editar el sitio institucional.' })
+    const body = await readBody(request), content = body.content || {}
+    const allowedFonts = ['Inter', 'Manrope', 'Arial', 'Georgia', 'Trebuchet MS']
+    const title = String(content.title || '').trim(), eyebrow = String(content.eyebrow || '').trim(), subtitle = String(content.subtitle || '').trim(), aboutTitle = String(content.aboutTitle || '').trim(), aboutText = String(content.aboutText || '').trim()
+    const primaryColor = String(content.primaryColor || '').trim(), accentColor = String(content.accentColor || '').trim(), fontFamily = String(content.fontFamily || 'Manrope').trim()
+    const validColor = value => /^#[0-9a-f]{6}$/i.test(value)
+    if (title.length > 120 || eyebrow.length > 80 || subtitle.length > 300 || aboutTitle.length > 120 || aboutText.length > 2500 || !validColor(primaryColor) || !validColor(accentColor) || !allowedFonts.includes(fontFamily)) return json(response, 400, { error: 'Revisa los textos, colores y tipografía antes de guardar.' })
+    const normalized = { title, eyebrow, subtitle, aboutTitle, aboutText, primaryColor, accentColor, fontFamily }
+    await db.run(`INSERT INTO school_public_sites (school_id, content_json, updated_by) VALUES (?, ?, ?)
+      ON CONFLICT(school_id) DO UPDATE SET content_json = excluded.content_json, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`, user.school_id, JSON.stringify(normalized), user.id)
+    await logAudit(user.school_id, user.id, 'school_public_site_updated')
+    return json(response, 200, { content: normalized })
+  }
+  if (url.pathname === '/api/school-site/photos' && method === 'POST') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden gestionar fotos institucionales.' })
+    const body = await readLargeJsonBody(request, 6 * 1024 * 1024)
+    const mime = String(body.contentType || ''), encoded = String(body.data || '').replace(/^data:[^;]+;base64,/, ''), title = String(body.title || '').trim().slice(0, 100), altText = String(body.altText || title).trim().slice(0, 200)
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime) || !encoded || encoded.length > 5_600_000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return json(response, 400, { error: 'Sube una foto JPG, PNG o WebP de máximo 4 MB.' })
+    const data = Buffer.from(encoded, 'base64')
+    if (!data.length || data.length > 4 * 1024 * 1024) return json(response, 413, { error: 'Cada foto puede pesar hasta 4 MB.' })
+    const id = randomUUID(), isHero = body.isHero === true
+    await db.transaction(async tx => {
+      if (isHero) await tx.run('UPDATE school_site_photos SET is_hero = 0 WHERE school_id = ?', user.school_id)
+      await tx.run(`INSERT INTO school_site_photos (id, school_id, title, alt_text, content_type, file_name, photo_data, is_hero, sort_order, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM school_site_photos WHERE school_id = ?), 0), ?)`, id, user.school_id, title, altText, mime, String(body.fileName || 'foto').slice(0, 160), data, isHero ? 1 : 0, user.school_id, user.id)
+    })
+    await logAudit(user.school_id, user.id, `school_site_photo_added:${id}`)
+    return json(response, 201, { photo: { id, title, altText, isHero, url: `data:${mime};base64,${data.toString('base64')}` } })
+  }
+  const sitePhotoMatch = url.pathname.match(/^\/api\/school-site\/photos\/([0-9a-f-]{36})$/i)
+  if (sitePhotoMatch && method === 'DELETE') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden gestionar fotos institucionales.' })
+    const deleted = await db.run('DELETE FROM school_site_photos WHERE id = ? AND school_id = ?', sitePhotoMatch[1], user.school_id)
+    if (!(deleted.rowCount ?? deleted.changes ?? 0)) return json(response, 404, { error: 'No encontramos esa foto en este colegio.' })
+    await logAudit(user.school_id, user.id, `school_site_photo_deleted:${sitePhotoMatch[1]}`)
+    return json(response, 200, { deleted: true })
+  }
+  if (url.pathname === '/api/school-site/events' && method === 'POST') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden gestionar eventos públicos.' })
+    const body = await readBody(request), title = String(body.title || '').trim(), details = String(body.details || '').trim(), date = String(body.eventDate || ''), location = String(body.location || '').trim()
+    if (title.length < 3 || title.length > 140 || details.length > 1800 || !validDate(date) || location.length > 160) return json(response, 400, { error: 'Completa el título y una fecha válida. La descripción admite hasta 1.800 caracteres.' })
+    const id = randomUUID()
+    await db.run('INSERT INTO school_site_events (id, school_id, title, details, event_date, location, is_published, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, title, details, date, location, body.isPublished === false ? 0 : 1, user.id)
+    await logAudit(user.school_id, user.id, `school_site_event_created:${id}`)
+    return json(response, 201, { event: { id, title, details, eventDate: date, location, isPublished: body.isPublished !== false } })
+  }
+  const siteEventMatch = url.pathname.match(/^\/api\/school-site\/events\/([0-9a-f-]{36})$/i)
+  if (siteEventMatch && method === 'PUT') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden gestionar eventos públicos.' })
+    const body = await readBody(request), title = String(body.title || '').trim(), details = String(body.details || '').trim(), date = String(body.eventDate || ''), location = String(body.location || '').trim()
+    if (title.length < 3 || title.length > 140 || details.length > 1800 || !validDate(date) || location.length > 160) return json(response, 400, { error: 'Completa el título y una fecha válida. La descripción admite hasta 1.800 caracteres.' })
+    const updated = await db.run('UPDATE school_site_events SET title = ?, details = ?, event_date = ?, location = ?, is_published = ? WHERE id = ? AND school_id = ?', title, details, date, location, body.isPublished === false ? 0 : 1, siteEventMatch[1], user.school_id)
+    if (!(updated.rowCount ?? updated.changes ?? 0)) return json(response, 404, { error: 'No encontramos ese evento en este colegio.' })
+    await logAudit(user.school_id, user.id, `school_site_event_updated:${siteEventMatch[1]}`)
+    return json(response, 200, { event: { id: siteEventMatch[1], title, details, eventDate: date, location, isPublished: body.isPublished !== false } })
+  }
+  if (siteEventMatch && method === 'DELETE') {
+    if (!siteManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración y rectoría pueden gestionar eventos públicos.' })
+    const deleted = await db.run('DELETE FROM school_site_events WHERE id = ? AND school_id = ?', siteEventMatch[1], user.school_id)
+    if (!(deleted.rowCount ?? deleted.changes ?? 0)) return json(response, 404, { error: 'No encontramos ese evento en este colegio.' })
+    await logAudit(user.school_id, user.id, `school_site_event_deleted:${siteEventMatch[1]}`)
+    return json(response, 200, { deleted: true })
+  }
 
   if (url.pathname === '/api/password-reset-requests' && method === 'GET') {
     if (!passwordResetReviewRoles.has(user.role)) return json(response, 403, { error: 'Solo rectoría y administración pueden revisar estas solicitudes.' })
