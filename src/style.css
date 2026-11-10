@@ -1291,4 +1291,7 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .institutional-video{position:relative;aspect-ratio:16/9;background:#102a40}
 .institutional-video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .institutional-content-card .dialog-actions{justify-content:flex-start;margin-top:5px}
+.offline-queue-notice{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px}
+.offline-queue-notice .button{flex:none}
+@media(max-width:760px){.offline-queue-notice{align-items:stretch;flex-direction:column}.offline-queue-notice .button{width:100%}}
 @media(max-width:760px){.institutional-content-editor{padding:16px}.institutional-content-editor>.form-row,.institutional-content-grid{grid-template-columns:1fr}.institutional-content-card-body{padding:16px}.institutional-content-card-body h2{font-size:17px}}

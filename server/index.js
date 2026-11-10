@@ -1566,7 +1566,7 @@ async function route(request, response) {
 
   if (url.pathname === '/api/admin/backup' && method === 'GET') {
     if (user.role !== 'admin') return json(response, 403, { error: 'Solo el administrador puede descargar el respaldo del colegio.' })
-    const [school, users, students, courses, assignments, enrollments, attendance, assessments, grades, requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, surveys, surveyVotes, certificates, audit] = await Promise.all([
+    const [school, users, students, courses, assignments, enrollments, attendance, assessments, grades, requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, surveys, surveyVotes, certificates, promotionResults, audit] = await Promise.all([
       db.get('SELECT id, slug, name, contact_email AS "contactEmail", contact_phone AS "contactPhone", address, primary_color AS "primaryColor" FROM schools WHERE id = ?', user.school_id),
       db.all('SELECT id, email, full_name AS name, role, is_active AS active FROM users WHERE school_id = ? AND deleted_at IS NULL', user.school_id),
       db.all('SELECT id, full_name AS name, document, document_type AS "documentType", document_issued_place AS "documentIssuedPlace", grade, guardian_name AS guardian, guardian_phone AS phone, status FROM students WHERE school_id = ?', user.school_id),
@@ -1587,13 +1587,51 @@ async function route(request, response) {
       db.all('SELECT id, course_id AS "courseId", title, description, options_json AS options, closes_at AS "closesAt", is_published AS published, created_by AS "createdBy", created_at AS "createdAt" FROM school_surveys WHERE school_id = ?', user.school_id),
       db.all('SELECT survey_id AS "surveyId", user_id AS "userId", option_index AS "optionIndex", created_at AS "createdAt" FROM survey_votes WHERE school_id = ?', user.school_id),
       db.all('SELECT id, student_id AS "studentId", certificate_number AS "certificateNumber", certificate_type AS "certificateType", student_name AS "studentName", grade, academic_year AS "academicYear", issued_by AS "issuedBy", created_at AS "issuedAt" FROM school_certificates WHERE school_id = ?', user.school_id),
+      db.all('SELECT student_id AS "studentId", academic_year AS "academicYear", current_grade AS "currentGrade", result_status AS "resultStatus", new_grade AS "newGrade", source_reference AS "sourceReference", created_by AS "createdBy", created_at AS "createdAt" FROM student_promotion_results WHERE school_id = ?', user.school_id),
       db.all('SELECT actor_user_id AS "actorUserId", action, created_at AS "createdAt" FROM audit_log WHERE school_id = ? ORDER BY id', user.school_id),
     ])
     const date = new Date().toISOString()
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="educa-respaldo-${school.slug}-${date.slice(0, 10)}.json"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-    response.end(JSON.stringify({ format: 'educa-school-backup-v1', generatedAt: date, school, users, students, courses, assignments, enrollments, attendance, assessments, grades, enrollmentRequests: requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, surveys, surveyVotes, certificates, audit }, null, 2))
+    response.end(JSON.stringify({ format: 'educa-school-backup-v1', generatedAt: date, school, users, students, courses, assignments, enrollments, attendance, assessments, grades, enrollmentRequests: requests, events, schedule, observations, periods, justifications, communications, activityRegistrations, surveys, surveyVotes, certificates, promotionResults, audit }, null, 2))
     await logAudit(user.school_id, user.id, 'school_backup_downloaded')
     return
+  }
+
+  if (url.pathname === '/api/students/promotion-results/import' && method === 'POST') {
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden cargar resultados de promoción.' })
+    const body = await readBody(request)
+    const academicYear = String(body.academicYear || '').trim()
+    const rows = body.records
+    const allowedStatuses = new Set(['Promovido', 'Reprobado', 'Pendiente', 'Trasladado', 'Desertor'])
+    if (!/^\d{4}$/.test(academicYear) || Number(academicYear) < 2000 || Number(academicYear) > 2100) return json(response, 400, { error: 'Selecciona un año lectivo de cuatro dígitos.' })
+    if (!Array.isArray(rows) || !rows.length || rows.length > 1000) return json(response, 400, { error: 'El informe debe contener entre 1 y 1.000 estudiantes.' })
+    const clean = rows.map((row, index) => ({ rowNo: index + 2, document: String(row.document || '').trim(), currentGrade: String(row.currentGrade || '').trim().slice(0, 40), resultStatus: String(row.resultStatus || '').trim(), newGrade: String(row.newGrade || '').trim().slice(0, 40) }))
+    const normalizeDocument = value => String(value || '').normalize('NFKC').toLocaleUpperCase('es').replace(/[^\p{L}\p{N}]/gu, '')
+    const normalizedDocuments = clean.map(row => normalizeDocument(row.document))
+    if (clean.some(row => !row.document || normalizeDocument(row.document).length < 3 || row.currentGrade.length < 1 || !allowedStatuses.has(row.resultStatus) || row.newGrade.length > 40 || (row.resultStatus === 'Promovido' && !row.newGrade)) || new Set(normalizedDocuments).size !== normalizedDocuments.length) {
+      return json(response, 400, { error: 'Hay filas inválidas o documentos repetidos. Cada fila requiere documento, grado actual y un único estado; los promovidos también requieren nuevo grado.' })
+    }
+    const schoolStudents = await db.all('SELECT id, document FROM students WHERE school_id = ?', user.school_id)
+    const byDocument = new Map(schoolStudents.map(student => [normalizeDocument(student.document), student]))
+    const missing = clean.filter(row => !byDocument.has(normalizeDocument(row.document)))
+    if (missing.length) return json(response, 422, { error: `No se encontraron estudiantes ya registrados para las filas ${missing.slice(0, 10).map(row => row.rowNo).join(', ')}${missing.length > 10 ? '…' : ''}. Verifica sus documentos; no se guardó ninguna fila.` })
+    let inserted = 0, updated = 0
+    await db.transaction(async tx => {
+      for (const row of clean) {
+        const student = byDocument.get(normalizeDocument(row.document))
+        const existing = await tx.get('SELECT id FROM student_promotion_results WHERE school_id = ? AND student_id = ? AND academic_year = ?', user.school_id, student.id, academicYear)
+        const id = existing?.id || randomUUID()
+        if (existing) {
+          await tx.run('UPDATE student_promotion_results SET current_grade = ?, result_status = ?, new_grade = ?, source_reference = ?, created_by = ?, created_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', row.currentGrade, row.resultStatus, row.newGrade, 'Informe final de matrículas SIMAT', user.id, id, user.school_id)
+          updated++
+        } else {
+          await tx.run('INSERT INTO student_promotion_results (id, school_id, student_id, academic_year, current_grade, result_status, new_grade, source_reference, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, student.id, academicYear, row.currentGrade, row.resultStatus, row.newGrade, 'Informe final de matrículas SIMAT', user.id)
+          inserted++
+        }
+      }
+    })
+    await logAudit(user.school_id, user.id, `student_promotion_results_imported:${academicYear}:${inserted}:${updated}`)
+    return json(response, 200, { imported: inserted, updated, total: clean.length })
   }
 
   if (url.pathname === '/api/students/import' && method === 'POST') {
@@ -2202,9 +2240,14 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
         OR EXISTS (SELECT 1 FROM attendance_records ar WHERE ar.course_id = c.id AND ar.student_id = ?)
       ) AND NOT EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = ? AND se.course_id = c.id AND se.academic_year = c.academic_year)
       ORDER BY "academicYear" DESC, grade, "courseName"`, student.grade, user.school_id, studentId, user.school_id, studentId, studentId, studentId)
+    const promotionResults = await db.all(`SELECT id AS "enrollmentId", NULL AS "courseId", academic_year AS "academicYear",
+        current_grade AS grade, '' AS "courseName", result_status AS status, '' AS "startDate", '' AS "endDate",
+        'Informe final de matrículas' AS source, new_grade AS "newGrade", source_reference AS "sourceReference"
+      FROM student_promotion_results WHERE school_id = ? AND student_id = ?`, user.school_id, studentId)
     const publications = await db.all(`SELECT academic_year AS "academicYear", period FROM grade_period_publications
       WHERE school_id = ? AND is_published = 1 ORDER BY academic_year DESC, period`, user.school_id)
-    return json(response, 200, { student, records: records.map(record => ({ ...record, reportPeriods: publications.filter(item => item.academicYear === record.academicYear) })) })
+    const history = [...records, ...promotionResults].sort((a, b) => String(b.academicYear).localeCompare(String(a.academicYear)) || String(a.grade).localeCompare(String(b.grade), 'es', { numeric: true }))
+    return json(response, 200, { student, records: history.map(record => ({ ...record, reportPeriods: publications.filter(item => item.academicYear === record.academicYear) })) })
   }
   if (url.pathname === '/api/certificates/options' && method === 'GET') {
     if (![...certificateRoles, 'acudiente'].includes(user.role)) return json(response, 403, { error: 'Las cuentas de estudiante no pueden solicitar certificados ni constancias.' })
@@ -3422,6 +3465,12 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
             AND c.academic_year = (SELECT MAX(current_course.academic_year) FROM courses current_course
               WHERE current_course.school_id = c.school_id AND current_course.grade = c.grade AND current_course.is_active = 1)))`, studentSubmissionMatch[1], user.school_id, user.school_id, student.grade, student.id, student.id)
     if (!assessment) return json(response, 404, { error: 'No encontramos esa tarea activa para el grado de este estudiante.' })
+    const idempotencyKey = String(body.idempotencyKey || '')
+    if (idempotencyKey && !/^[0-9a-f-]{36}$/i.test(idempotencyKey)) return json(response, 400, { error: 'La clave de entrega no es válida.' })
+    if (idempotencyKey) {
+      const prior = await db.get('SELECT id, submission_no AS "submissionNo", uploaded_at AS "uploadedAt" FROM work_submissions WHERE school_id = ? AND student_id = ? AND idempotency_key = ?', user.school_id, student.id, idempotencyKey)
+      if (prior) return json(response, 200, { submissionId: prior.id, submissionNo: Number(prior.submissionNo), uploadedAt: prior.uploadedAt, alreadyReceived: true })
+    }
     const base64 = String(body.fileBase64 || '')
     if (!base64 || base64.length > 11_184_812 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) return json(response, 400, { error: 'El archivo está vacío o no es válido.' })
     const fileData = Buffer.from(base64, 'base64')
@@ -3435,9 +3484,13 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const submissionId = randomUUID()
     try {
       await db.run(`INSERT INTO work_submissions (id, school_id, assessment_id, student_id, uploaded_by, submission_no,
-        original_file_name, content_type, file_size, file_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        submissionId, user.school_id, assessment.id, student.id, user.id, attempt, originalFileName, fileType.mime, fileData.length, fileData)
+        original_file_name, content_type, file_size, file_data, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        submissionId, user.school_id, assessment.id, student.id, user.id, attempt, originalFileName, fileType.mime, fileData.length, fileData, idempotencyKey || null)
     } catch (error) {
+      if (idempotencyKey && (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE'))) {
+        const prior = await db.get('SELECT id, submission_no AS "submissionNo", uploaded_at AS "uploadedAt" FROM work_submissions WHERE school_id = ? AND student_id = ? AND idempotency_key = ?', user.school_id, student.id, idempotencyKey)
+        if (prior) return json(response, 200, { submissionId: prior.id, submissionNo: Number(prior.submissionNo), uploadedAt: prior.uploadedAt, alreadyReceived: true })
+      }
       if (String(error.code).startsWith('23') || String(error.message).includes('UNIQUE')) return json(response, 409, { error: 'La entrega cambió al mismo tiempo. Actualiza la página e inténtalo de nuevo.' })
       throw error
     }

@@ -922,6 +922,35 @@ export async function migrate() {
     if (!names.has('target_id')) await db.exec('ALTER TABLE user_notifications ADD COLUMN target_id TEXT')
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 27)
   }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 28)) {
+    const submissionColumns = usePostgres
+      ? await db.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'work_submissions'")
+      : await db.all('PRAGMA table_info(work_submissions)')
+    const names = new Set(submissionColumns.map(column => column.name))
+    if (!names.has('idempotency_key')) await db.exec('ALTER TABLE work_submissions ADD COLUMN idempotency_key TEXT')
+    await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS work_submissions_idempotency_idx ON work_submissions(school_id, idempotency_key) WHERE idempotency_key IS NOT NULL")
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 28)
+  }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 29)) {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS student_promotion_results (
+        id TEXT PRIMARY KEY,
+        school_id TEXT NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+        student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        academic_year TEXT NOT NULL,
+        current_grade TEXT NOT NULL,
+        result_status TEXT NOT NULL CHECK (result_status IN ('Promovido', 'Reprobado', 'Pendiente', 'Trasladado', 'Desertor')),
+        new_grade TEXT NOT NULL DEFAULT '',
+        source_reference TEXT NOT NULL DEFAULT 'Informe final de matrículas SIMAT',
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
+        UNIQUE (school_id, student_id, academic_year)
+      );
+      CREATE INDEX IF NOT EXISTS student_promotion_results_history_idx
+        ON student_promotion_results(school_id, student_id, academic_year DESC);
+    `)
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 29)
+  }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 3)
