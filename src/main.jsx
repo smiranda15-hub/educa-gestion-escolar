@@ -8,7 +8,7 @@ import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BookOpen, Building2, CreditCard,
   CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck,
   Award, CalendarPlus, Clock3, Copy, Download, Eye, EyeOff, FileText, GraduationCap, History, IdCard, LayoutDashboard, LockKeyhole, LogOut, Menu,
-  PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X, Mail, MapPin, Phone, Send, Inbox, Reply, Play,
+  PartyPopper, Plus, Pencil, PenTool, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Smartphone, Trash2, Users, UserRound, X, Mail, MapPin, Phone, Send, Inbox, Reply, Play, Megaphone,
 } from 'lucide-react'
 import './style.css'
 import './edu-design.css'
@@ -139,6 +139,19 @@ const roleName = value => roles.find(role => role.value === value)?.label || val
 const institutionManagerEmail = 'smiranda15@uan.edu.co'
 const isCaldasInstitution = school => /caldas/i.test(`${school?.name || ''} ${school?.slug || ''}`)
 const institutionPublicSlug = school => isCaldasInstitution(school) ? 'institucion-educativa-caldas' : school.slug
+const defaultInstitutionSiteContent = school => isCaldasInstitution(school) ? {
+  eyebrow: 'COMUNIDAD EDUCATIVA · FLANDES, TOLIMA',
+  title: 'Institución Educativa Caldas',
+  subtitle: 'Una institución de Flandes que acompaña a sus estudiantes desde preescolar hasta la educación media, en jornadas de mañana y tarde y bajo Calendario A.',
+  aboutTitle: 'Educación que acompaña cada etapa',
+  aboutText: 'La Institución Educativa Caldas está ubicada en Flandes, Tolima. Su oferta educativa comprende preescolar, primaria, básica secundaria y media; cuenta con jornadas de mañana y tarde y se organiza bajo Calendario A. En EDUCA, estudiantes, familias, docentes y directivos pueden mantenerse conectados con la vida académica e institucional.',
+  primaryColor: school?.primaryColor || '#176b45',
+  accentColor: '#d0a241',
+  fontFamily: 'Manrope',
+} : {
+  eyebrow: '', title: '', subtitle: '', aboutTitle: '', aboutText: '',
+  primaryColor: school?.primaryColor || '#286887', accentColor: '#d0a241', fontFamily: 'Manrope',
+}
 const institutionFromPublicSlug = (schools, slug) => schools.find(item => item.slug === slug || institutionPublicSlug(item) === slug)
 const schoolOption = school => {
   const name = isCaldasInstitution(school) ? 'Institución Educativa Caldas' : school.name
@@ -165,7 +178,8 @@ function InstitutionHome({ school, onEnter, onChange }) {
     return () => controller.abort()
   }, [school?.slug])
   if (!school) return null
-  const siteContent = publicSite?.content || {}
+  const siteDefaults = defaultInstitutionSiteContent(school)
+  const siteContent = { ...siteDefaults, ...Object.fromEntries(Object.entries(publicSite?.content || {}).filter(([, value]) => String(value ?? '').trim())) }
   const validColor = value => /^#[\da-f]{6}$/i.test(String(value || ''))
   const accentColor = validColor(siteContent.primaryColor) ? siteContent.primaryColor : school.primaryColor || '#286887'
   const highlightColor = validColor(siteContent.accentColor) ? siteContent.accentColor : '#d0a241'
@@ -521,7 +535,7 @@ function InstitutionalContentModule({ user, notify }) {
 }
 
 function SchoolWebsiteEditor({ user, notify }) {
-  const initialContent = { eyebrow: '', title: '', subtitle: '', aboutTitle: '', aboutText: '', primaryColor: user?.school?.primaryColor || '#176b45', accentColor: '#d0a241', fontFamily: 'Manrope' }
+  const initialContent = defaultInstitutionSiteContent(user?.school)
   const [content, setContent] = useState(initialContent)
   const [photos, setPhotos] = useState([])
   const [events, setEvents] = useState([])
@@ -538,7 +552,7 @@ function SchoolWebsiteEditor({ user, notify }) {
       const response = await fetch('/api/school-site', { credentials: 'same-origin' })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'No se pudo cargar el sitio institucional.')
-      setContent({ ...initialContent, ...(result.content || {}) })
+      setContent({ ...initialContent, ...Object.fromEntries(Object.entries(result.content || {}).filter(([, value]) => String(value ?? '').trim())) })
       setPhotos(result.photos || [])
       setEvents(result.events || [])
       setError('')
@@ -552,7 +566,7 @@ function SchoolWebsiteEditor({ user, notify }) {
       const response = await fetch('/api/school-site', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'No se pudo guardar la página.')
-      setContent({ ...initialContent, ...(result.content || content) }); notify?.('Página institucional guardada.')
+      setContent({ ...initialContent, ...Object.fromEntries(Object.entries(result.content || content).filter(([, value]) => String(value ?? '').trim())) }); notify?.('Página institucional guardada.')
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
   const addPhoto = async event => {
