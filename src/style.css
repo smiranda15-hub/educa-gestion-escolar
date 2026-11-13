@@ -1433,3 +1433,9 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 .agenda-hub-tab.selected { color: #174b65; background: #fff; box-shadow: 0 2px 7px #173b5512; }
 .agenda-hub-tab.selected svg { color: #16827f; }
 @media(max-width:480px) { .agenda-hub-tabs { width: 100%; } .agenda-hub-tab { flex: 1; gap: 5px; padding-inline: 7px; font-size: 11px; } }
+.navigation-hub-tabs { display: flex; align-items: center; gap: 6px; max-width: 100%; margin: 0 0 20px; padding: 5px; overflow-x: auto; border: 1px solid #e0e9ed; border-radius: 12px; background: #f7fafb; scrollbar-width: thin; }
+.navigation-hub-tab { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 9px; color: #647b89; background: transparent; font-size: 12px; font-weight: 650; white-space: nowrap; transition: color .15s ease,background .15s ease,box-shadow .15s ease; }
+.navigation-hub-tab:hover { color: #1c596b; background: #edf4f5; }
+.navigation-hub-tab.selected { color: #174b65; background: #fff; box-shadow: 0 2px 7px #173b5512; }
+.navigation-hub-tab.selected svg { color: #16827f; }
+@media(max-width:600px) { .navigation-hub-tabs { margin-bottom: 15px; } .navigation-hub-tab { min-height: 34px; gap: 6px; padding: 7px 10px; font-size: 11px; } }
