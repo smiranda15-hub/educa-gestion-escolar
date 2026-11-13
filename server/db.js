@@ -66,12 +66,22 @@ export const db = {
 }
 
 export async function nextDocumentNumber(tx, schoolId, documentType, academicYear) {
-  const year = String(academicYear || '').replace(/[^0-9-]/g, '').slice(0, 12) || String(new Date().getFullYear())
+  // New folios always use one calendar year (e.g. 2026). Legacy records that
+  // already contain a range remain untouched in the document registry.
+  const yearMatch = String(academicYear || '').trim().match(/^(\d{4})(?:-\d{4})?$/)
+  const year = yearMatch?.[1] || String(new Date().getFullYear())
+  const prefix = `EDU-${documentType}-${year}-`
+  const existingNumbers = await tx.all(`SELECT document_number AS "documentNumber" FROM document_control_registry
+    WHERE school_id = ? AND document_type = ? AND document_number LIKE ?`, schoolId, documentType, `${prefix}%`)
+  const highestExisting = existingNumbers.reduce((highest, item) => {
+    const match = String(item.documentNumber || '').match(new RegExp(`^${prefix}(\\d+)$`))
+    return match ? Math.max(highest, Number(match[1]) || 0) : highest
+  }, 0)
   const row = await tx.get(`INSERT INTO document_control_counters (school_id, document_type, academic_year, last_number)
-    VALUES (?, ?, ?, 1)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT(school_id, document_type, academic_year)
-    DO UPDATE SET last_number = document_control_counters.last_number + 1
-    RETURNING last_number`, schoolId, documentType, year)
+    DO UPDATE SET last_number = CASE WHEN document_control_counters.last_number < ? THEN ? ELSE document_control_counters.last_number + 1 END
+    RETURNING last_number`, schoolId, documentType, year, highestExisting + 1, highestExisting + 1, highestExisting + 1)
   return `EDU-${documentType}-${year}-${String(row.last_number).padStart(5, '0')}`
 }
 
@@ -495,6 +505,7 @@ export async function migrate() {
       body TEXT NOT NULL DEFAULT '',
       media_url TEXT NOT NULL DEFAULT '',
       is_published INTEGER NOT NULL DEFAULT 0,
+      show_in_help INTEGER NOT NULL DEFAULT 0,
       created_by TEXT NOT NULL REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT ${textTimestampDefault},
       updated_at TEXT NOT NULL DEFAULT ${textTimestampDefault}
@@ -983,6 +994,14 @@ export async function migrate() {
         ON student_promotion_results(school_id, student_id, academic_year DESC);
     `)
     await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 29)
+  }
+  if (!await db.get('SELECT version FROM schema_migrations WHERE version = ?', 30)) {
+    const contentColumns = usePostgres
+      ? await db.all("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'institutional_content'")
+      : await db.all('PRAGMA table_info(institutional_content)')
+    if (!contentColumns.some(column => column.name === 'show_in_help')) await db.exec('ALTER TABLE institutional_content ADD COLUMN show_in_help INTEGER NOT NULL DEFAULT 0')
+    await db.exec("UPDATE institutional_content SET show_in_help = 1 WHERE category = 'video' AND is_published = 1")
+    await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 30)
   }
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 1)
   await db.run('INSERT INTO schema_migrations(version) VALUES (?) ON CONFLICT(version) DO NOTHING', 2)

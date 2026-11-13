@@ -1073,7 +1073,18 @@ async function route(request, response) {
       BOL: [['Estudiante', source.studentName], ['Identificación', [source.studentDocumentType, source.studentDocument, source.documentIssuedPlace].filter(Boolean).join(' · ')], ['Grado', source.grade], ['Curso', source.courseName], ['Año lectivo', source.academicYear], ['Periodo', source.period], ['Estado de publicación', Number(source.isPublished) ? 'Publicado' : 'Vista previa'], ['Firmas guardadas', reportSignatures.map(item => [item.name, item.title].filter(Boolean).join(' · ')).join('; ')], ['Fecha de generación', source.createdAt]],
     }
     const fields = (fieldsByType[record.documentType] || []).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '').map(([label, value]) => ({ label, value: String(value) }))
-    return json(response, 200, { sourceDocument: { ...record, fields, title: ({ SOLMAT: 'Solicitud de matrícula', MAT: 'Registro de matrícula', CERT: 'Certificado o constancia', BOL: 'Boletín académico', PERS: 'Constancia de personal' })[record.documentType] || 'Documento institucional' } })
+    const title = ({ SOLMAT: 'Solicitud de matrícula', MAT: 'Registro de matrícula', CERT: 'Certificado o constancia', BOL: 'Boletín académico', PERS: 'Constancia de personal' })[record.documentType] || 'Documento institucional'
+    const sourceDocument = { ...record, fields, title }
+    if (url.searchParams.get('download') === 'html') {
+      const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+      const filename = `EDUCA-${record.documentType}-${record.documentNumber || 'documento'}.html`.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+      const rows = fields.map(field => `<tr><th>${escapeHtml(field.label)}</th><td>${escapeHtml(field.value)}</td></tr>`).join('')
+      const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · ${escapeHtml(record.documentNumber)}</title><style>body{font:15px/1.55 Arial,sans-serif;color:#19364d;margin:40px auto;max-width:900px;padding:0 28px}header{border-bottom:3px solid #286b83;padding-bottom:18px;margin-bottom:24px}header small{letter-spacing:.12em;color:#397f83;font-weight:bold}h1{font-size:25px;margin:8px 0}p{color:#526b7e}.folio{font-weight:bold;color:#1c567a}table{width:100%;border-collapse:collapse;margin:26px 0}th,td{text-align:left;vertical-align:top;padding:11px 12px;border:1px solid #d6e1e8}th{width:30%;background:#f1f6f8}footer{border-top:1px solid #d6e1e8;padding-top:16px;font-size:12px;color:#526b7e}@media print{body{margin:15mm auto;padding:0}button{display:none}}</style></head><body><header><small>ARCHIVO DOCUMENTAL · ${escapeHtml(record.schoolName)}</small><h1>${escapeHtml(title)}</h1><p class="folio">Número de control: ${escapeHtml(record.documentNumber)}</p></header><p>Estado: <strong>${escapeHtml(record.status)}</strong> · Año lectivo: <strong>${escapeHtml(record.academicYear)}</strong>${record.period ? ` · Periodo: <strong>${escapeHtml(record.period)}</strong>` : ''}</p><table><tbody>${rows}</tbody></table><footer>Copia de archivo generada desde EDUCA el ${escapeHtml(new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' }))}. Folio institucional: ${escapeHtml(record.documentNumber)}.</footer></body></html>`
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" })
+      response.end(html)
+      return
+    }
+    return json(response, 200, { sourceDocument })
   }
   const documentControlMatch = url.pathname.match(/^\/api\/document-control\/([0-9a-f-]{36})$/i)
   if (documentControlMatch && method === 'DELETE') {
@@ -1997,9 +2008,9 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   if (url.pathname === '/api/institutional-content' && method === 'GET') {
     if (!contentRoles.includes(user.role)) return json(response, 403, { error: 'No tienes permiso para consultar el contenido institucional.' })
     const canManage = contentManagers.includes(user.role)
-    const items = await db.all(`SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", created_at AS "createdAt", updated_at AS "updatedAt"
+    const items = await db.all(`SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", show_in_help AS "showInHelp", created_at AS "createdAt", updated_at AS "updatedAt"
       FROM institutional_content WHERE school_id = ? AND (? = 1 OR is_published = 1) ORDER BY updated_at DESC LIMIT 200`, user.school_id, canManage ? 1 : 0)
-    return json(response, 200, { items: items.map(item => ({ ...item, isPublished: Boolean(item.isPublished) })) })
+    return json(response, 200, { items: items.map(item => ({ ...item, isPublished: Boolean(item.isPublished), showInHelp: Boolean(item.showInHelp) })) })
   }
   if (url.pathname === '/api/institutional-content' && method === 'POST') {
     if (!contentManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar el contenido institucional.' })
@@ -2009,24 +2020,25 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const content = String(body.body || '').trim()
     const mediaUrl = String(body.mediaUrl || '').trim()
     const isPublished = body.isPublished === true
+    const showInHelp = body.showInHelp === true
     if (!contentCategories.includes(category) || title.length < 3 || title.length > 160 || content.length > 12000 || mediaUrl.length > 1500) return json(response, 400, { error: 'Revisa la categoría, el título, el contenido y el enlace.' })
     if (mediaUrl) { try { const parsed = new URL(mediaUrl); if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error() } catch { return json(response, 400, { error: 'El enlace multimedia debe ser una URL web válida.' }) } }
     const id = randomUUID()
-    await db.run('INSERT INTO institutional_content (id, school_id, category, title, body, media_url, is_published, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, category, title, content, mediaUrl, isPublished ? 1 : 0, user.id)
+    await db.run('INSERT INTO institutional_content (id, school_id, category, title, body, media_url, is_published, show_in_help, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, user.school_id, category, title, content, mediaUrl, isPublished ? 1 : 0, showInHelp ? 1 : 0, user.id)
     await logAudit(user.school_id, user.id, `institutional_content_created:${category}:${isPublished ? 'published' : 'draft'}`)
-    return json(response, 201, { item: await db.get('SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", created_at AS "createdAt", updated_at AS "updatedAt" FROM institutional_content WHERE id = ? AND school_id = ?', id, user.school_id) })
+    return json(response, 201, { item: await db.get('SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", show_in_help AS "showInHelp", created_at AS "createdAt", updated_at AS "updatedAt" FROM institutional_content WHERE id = ? AND school_id = ?', id, user.school_id) })
   }
   const contentMatch = url.pathname.match(/^\/api\/institutional-content\/([0-9a-f-]{36})$/i)
   if (contentMatch && method === 'PUT') {
     if (!contentManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar el contenido institucional.' })
     const id = contentMatch[1], body = await readBody(request)
-    const category = String(body.category || ''), title = String(body.title || '').trim(), content = String(body.body || '').trim(), mediaUrl = String(body.mediaUrl || '').trim(), isPublished = body.isPublished === true
+    const category = String(body.category || ''), title = String(body.title || '').trim(), content = String(body.body || '').trim(), mediaUrl = String(body.mediaUrl || '').trim(), isPublished = body.isPublished === true, showInHelp = body.showInHelp === true
     if (!contentCategories.includes(category) || title.length < 3 || title.length > 160 || content.length > 12000 || mediaUrl.length > 1500) return json(response, 400, { error: 'Revisa la categoría, el título, el contenido y el enlace.' })
     if (mediaUrl) { try { const parsed = new URL(mediaUrl); if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error() } catch { return json(response, 400, { error: 'El enlace multimedia debe ser una URL web válida.' }) } }
-    const updated = await db.run('UPDATE institutional_content SET category = ?, title = ?, body = ?, media_url = ?, is_published = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', category, title, content, mediaUrl, isPublished ? 1 : 0, id, user.school_id)
+    const updated = await db.run('UPDATE institutional_content SET category = ?, title = ?, body = ?, media_url = ?, is_published = ?, show_in_help = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?', category, title, content, mediaUrl, isPublished ? 1 : 0, showInHelp ? 1 : 0, id, user.school_id)
     if (!(updated.rowCount ?? updated.changes ?? 0)) return json(response, 404, { error: 'No encontramos este contenido en la institución.' })
     await logAudit(user.school_id, user.id, `institutional_content_updated:${id}:${isPublished ? 'published' : 'draft'}`)
-    return json(response, 200, { item: await db.get('SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", created_at AS "createdAt", updated_at AS "updatedAt" FROM institutional_content WHERE id = ? AND school_id = ?', id, user.school_id) })
+    return json(response, 200, { item: await db.get('SELECT id, category, title, body, media_url AS "mediaUrl", is_published AS "isPublished", show_in_help AS "showInHelp", created_at AS "createdAt", updated_at AS "updatedAt" FROM institutional_content WHERE id = ? AND school_id = ?', id, user.school_id) })
   }
   if (contentMatch && method === 'DELETE') {
     if (!contentManagers.includes(user.role)) return json(response, 403, { error: 'Solo administración o rectoría pueden gestionar el contenido institucional.' })
@@ -3261,27 +3273,41 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const permitted = ['admin', 'rectoria', 'secretaria', 'docente', 'acudiente', 'estudiante']
     if (!permitted.includes(user.role)) return json(response, 403, { error: 'Tu rol no tiene acceso a boletines.' })
     let students
+    let studentCourses = []
+    const portalRole = ['acudiente', 'estudiante'].includes(user.role)
     if (['acudiente', 'estudiante'].includes(user.role)) {
       students = await db.all(`SELECT st.id, st.full_name AS name, st.grade FROM user_students us
         JOIN students st ON st.id = us.student_id WHERE us.user_id = ? AND st.school_id = ? ORDER BY st.full_name`, user.id, user.school_id)
+      studentCourses = await db.all(`SELECT DISTINCT se.student_id AS "studentId", c.id AS "courseId", c.grade, c.name AS "courseName", c.academic_year AS "academicYear"
+        FROM user_students us JOIN students st ON st.id = us.student_id AND st.school_id = ?
+        JOIN student_enrollments se ON se.student_id = us.student_id AND se.school_id = ?
+        JOIN courses c ON c.id = se.course_id AND c.school_id = se.school_id AND c.academic_year = se.academic_year WHERE us.user_id = ? AND us.school_id = ?
+        UNION
+        SELECT DISTINCT us.student_id AS "studentId", c.id AS "courseId", c.grade, c.name AS "courseName", c.academic_year AS "academicYear"
+        FROM user_students us JOIN students st ON st.id = us.student_id AND st.school_id = ? JOIN courses c ON c.school_id = ? WHERE us.user_id = ? AND us.school_id = ? AND (
+          EXISTS (SELECT 1 FROM grade_assessments a JOIN student_grades sg ON sg.assessment_id = a.id WHERE a.course_id = c.id AND sg.student_id = us.student_id)
+          OR EXISTS (SELECT 1 FROM attendance_records ar WHERE ar.course_id = c.id AND ar.student_id = us.student_id))`, user.school_id, user.school_id, user.id, user.school_id, user.school_id, user.school_id, user.id, user.school_id)
     } else if (user.role === 'docente') {
-      students = await db.all(`SELECT DISTINCT st.id, st.full_name AS name, st.grade FROM students st
-        JOIN courses c ON c.school_id = st.school_id AND c.grade = st.grade
-        JOIN course_teachers ct ON ct.course_id = c.id AND ct.user_id = ?
-        WHERE st.school_id = ? ORDER BY st.grade, st.full_name`, user.id, user.school_id)
+      // El docente solo ve estudiantes de sus cursos y el boletín recibe el
+      // curso exacto. Sin este vínculo el endpoint podía elegir otro paralelo
+      // del mismo grado y devolver un boletín vacío.
+      studentCourses = await db.all(`SELECT DISTINCT st.id AS "studentId", c.id AS "courseId", c.grade,
+          c.name AS "courseName", c.academic_year AS "academicYear"
+        FROM course_teachers ct
+        JOIN courses c ON c.id = ct.course_id AND c.school_id = ?
+        JOIN students st ON st.school_id = c.school_id AND st.grade = c.grade
+        WHERE ct.user_id = ? AND (
+          EXISTS (SELECT 1 FROM student_enrollments se WHERE se.school_id = c.school_id AND se.student_id = st.id AND se.course_id = c.id AND se.academic_year = c.academic_year)
+          OR EXISTS (SELECT 1 FROM grade_assessments a JOIN student_grades sg ON sg.assessment_id = a.id WHERE a.school_id = c.school_id AND a.course_id = c.id AND sg.student_id = st.id)
+          OR EXISTS (SELECT 1 FROM attendance_records ar WHERE ar.school_id = c.school_id AND ar.course_id = c.id AND ar.student_id = st.id))
+        ORDER BY c.academic_year DESC, c.grade, st.full_name`, user.school_id, user.id)
+      const studentIds = [...new Set(studentCourses.map(item => item.studentId))]
+      students = studentIds.length
+        ? await db.all(`SELECT id, full_name AS name, grade FROM students WHERE school_id = ? AND id IN (${studentIds.map(() => '?').join(',')}) ORDER BY grade, full_name`, user.school_id, ...studentIds)
+        : []
     } else {
       students = await db.all('SELECT id, full_name AS name, grade FROM students WHERE school_id = ? ORDER BY grade, full_name', user.school_id)
     }
-    const portalRole = ['acudiente', 'estudiante'].includes(user.role)
-    const studentCourses = portalRole ? await db.all(`SELECT DISTINCT se.student_id AS "studentId", c.id AS "courseId", c.grade, c.name AS "courseName", c.academic_year AS "academicYear"
-      FROM user_students us JOIN students st ON st.id = us.student_id AND st.school_id = ?
-      JOIN student_enrollments se ON se.student_id = us.student_id AND se.school_id = ?
-      JOIN courses c ON c.id = se.course_id AND c.school_id = se.school_id AND c.academic_year = se.academic_year WHERE us.user_id = ? AND us.school_id = ?
-      UNION
-      SELECT DISTINCT us.student_id AS "studentId", c.id AS "courseId", c.grade, c.name AS "courseName", c.academic_year AS "academicYear"
-      FROM user_students us JOIN students st ON st.id = us.student_id AND st.school_id = ? JOIN courses c ON c.school_id = ? WHERE us.user_id = ? AND us.school_id = ? AND (
-        EXISTS (SELECT 1 FROM grade_assessments a JOIN student_grades sg ON sg.assessment_id = a.id WHERE a.course_id = c.id AND sg.student_id = us.student_id)
-        OR EXISTS (SELECT 1 FROM attendance_records ar WHERE ar.course_id = c.id AND ar.student_id = us.student_id))`, user.school_id, user.school_id, user.id, user.school_id, user.school_id, user.school_id, user.id, user.school_id) : []
     const publications = await db.all(`SELECT academic_year AS "academicYear", period, is_published AS "isPublished",
         published_at AS "publishedAt" FROM grade_period_publications WHERE school_id = ? ${portalRole ? 'AND is_published = 1' : ''}
         ORDER BY academic_year DESC, period`, user.school_id)
@@ -3404,17 +3430,23 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const visiblePeriods = ['acudiente', 'estudiante'].includes(user.role)
       ? (await db.all('SELECT period FROM grade_period_publications WHERE school_id = ? AND academic_year = ? AND is_published = 1', user.school_id, academicYear)).map(item => item.period)
       : reportPeriods
-    const marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
-        a.due_at AS "dueAt", a.weight_percent AS "weightPercent", rule.scale_min AS "scaleMin",
+    let marks = await db.all(`SELECT a.subject, a.title, a.max_score AS "maxScore", a.period, a.instructions,
+        a.due_at AS "dueAt", a.weight_percent AS "weightPercent", a.created_by AS "createdBy", rule.scale_min AS "scaleMin",
         rule.scale_max AS "scaleMax", rule.passing_score AS "passingScore", sg.score, sg.comment, sg.updated_at AS "updatedAt",
         (SELECT u.full_name FROM course_teachers ct JOIN users u ON u.id = ct.user_id
-          WHERE ct.course_id = c.id AND ct.subject = a.subject ORDER BY u.full_name LIMIT 1) AS "teacherName"
+          WHERE ct.course_id = c.id AND LOWER(TRIM(ct.subject)) = LOWER(TRIM(a.subject)) ORDER BY u.full_name LIMIT 1) AS "teacherName"
       FROM grade_assessments a JOIN courses c ON c.id = a.course_id
-      LEFT JOIN academic_grade_rules rule ON rule.school_id = a.school_id AND rule.course_id = c.id AND rule.subject = a.subject AND rule.period = a.period
+      LEFT JOIN academic_grade_rules rule ON rule.school_id = a.school_id AND rule.course_id = c.id AND LOWER(TRIM(rule.subject)) = LOWER(TRIM(a.subject)) AND rule.period = a.period
       LEFT JOIN student_grades sg ON sg.assessment_id = a.id AND sg.student_id = ?
       WHERE a.school_id = ? AND c.school_id = ? AND c.grade = ? AND c.academic_year = ? AND (? = '' OR c.id = ?) AND a.period IN (${visiblePeriods.map(() => '?').join(',') || "'__none__'"})
-        AND (? <> 'docente' OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.subject = a.subject AND ct.user_id = ?))
+        AND (? <> 'docente' OR EXISTS (SELECT 1 FROM course_teachers ct WHERE ct.course_id = c.id AND ct.user_id = ?))
       ORDER BY a.subject, a.period, a.created_at, a.title`, student.id, user.school_id, user.school_id, reportGrade, academicYear, requestedCourseId, requestedCourseId, ...visiblePeriods, user.role, user.id)
+    if (user.role === 'docente') {
+      const assignedSubjects = await db.all('SELECT subject FROM course_teachers WHERE user_id = ? AND course_id = ?', user.id, reportCourse.id)
+      const normalizeSubject = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es').replace(/[^a-z0-9]+/g, ' ').trim()
+      const allowedSubjects = new Set(assignedSubjects.map(item => normalizeSubject(item.subject)).filter(Boolean))
+      marks = marks.filter(mark => mark.createdBy === user.id || allowedSubjects.has(normalizeSubject(mark.subject)))
+    }
     const bySubject = new Map()
     for (const mark of marks) {
       const score = mark.score === null ? null : Number(mark.score)
