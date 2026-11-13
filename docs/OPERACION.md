@@ -93,6 +93,17 @@ git push
 
 Railway inicia el despliegue vinculado a la rama. Revisa **Deployments** y los logs de compilación y arranque. Si el árbol de trabajo incluye archivos generados no deseados, agrégalos por nombre en vez de `git add .`.
 
+### Descarga de la aplicación para Windows
+
+El instalador de Windows se genera en `artifacts/windows-release/`. No subas el `.exe` al repositorio: pesa alrededor de 121 MB. Para habilitar el botón **Descargar Windows** de la página pública:
+
+1. Crea una publicación en GitHub Releases y adjunta el instalador `.exe` de `artifacts/windows-release/`.
+2. Copia el enlace HTTPS directo del archivo adjunto.
+3. En Railway, abre **Variables** del servicio EDUCA y agrega `EDUCA_WINDOWS_INSTALLER_URL` con ese enlace.
+4. Guarda y espera el redepliegue. El botón del sitio redirige al instalador configurado. Si falta la variable, la página explica que la descarga todavía no está publicada.
+
+Actualiza la publicación y la variable cuando generes una nueva versión. Mantén el instalador más reciente en Releases; los directorios `artifacts/` son resultados locales de compilación y no se publican con el código.
+
 ## 4. Correo saliente
 
 En Railway configura las variables en el servicio EDUCA, nunca en el servicio PostgreSQL. El servidor admite Resend API HTTPS y SMTP; en planes Railway que restringen SMTP saliente, usa Resend o un proveedor con API HTTPS.

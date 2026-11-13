@@ -406,6 +406,17 @@ async function route(request, response) {
   if (url.pathname.startsWith('/api/') && stateChangingMethods.has(method) && !requestOriginAllowed(request)) return json(response, 403, { error: 'Origen de solicitud no autorizado.' })
 
   if (method === 'GET' && url.pathname === '/api/health') return json(response, 200, { status: 'ok' })
+  if (method === 'GET' && url.pathname === '/api/downloads/windows') {
+    const configuredUrl = String(process.env.EDUCA_WINDOWS_INSTALLER_URL || '').trim()
+    let installerUrl
+    try { installerUrl = new URL(configuredUrl) } catch {}
+    if (installerUrl?.protocol === 'https:') {
+      response.writeHead(302, { Location: installerUrl.href, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' })
+      return response.end()
+    }
+    response.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+    return response.end(`<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Descarga de EDUCA para Windows</title><style>body{font:16px/1.6 system-ui,sans-serif;background:#f3f7fa;color:#18354b;margin:0;display:grid;min-height:100vh;place-items:center}.card{max-width:560px;margin:24px;padding:32px;background:white;border:1px solid #d9e5ed;border-radius:20px;box-shadow:0 16px 48px #18354b12}h1{font-size:1.6rem;margin-top:0}a{color:#23648a}</style><main class="card"><h1>Descarga para Windows</h1><p>El instalador de EDUCA todavía no está publicado para descarga. Vuelve a intentarlo más tarde o solicita el enlace al administrador.</p><p><a href="/">Volver a EDUCA</a></p></main></html>`)
+  }
   const staffCardVerificationMatch = url.pathname.match(/^\/api\/public\/staff-card\/([0-9a-f-]{36})$/i)
   if (method === 'GET' && staffCardVerificationMatch) {
     const record = await db.get(`SELECT p.id, p.full_name AS "staffName", p.position_title AS "positionTitle", p.is_active AS "isActive",
