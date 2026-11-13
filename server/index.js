@@ -32,6 +32,13 @@ const academicYearStart = value => {
   if (match[2] && Number(match[2]) !== Number(match[1]) + 1) return ''
   return match[1]
 }
+const schoolGradeRank = value => {
+  const normalized = String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('es')
+  const first = normalized.match(/^(\d{1,2}|[\p{L}]+)/u)?.[1] || ''
+  const numeric = Number(first)
+  if (/^\d+$/.test(first) && numeric >= 1 && numeric <= 11) return numeric
+  return ({ prejardin: -2, jardin: -1, transicion: 0, primero: 1, segundo: 2, tercero: 3, cuarto: 4, quinto: 5, sexto: 6, septimo: 7, octavo: 8, noveno: 9, decimo: 10, undecimo: 11, once: 11 })[first] ?? null
+}
 const readBody = async (request) => {
   let data = ''
   for await (const chunk of request) {
@@ -3976,10 +3983,10 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
   if (url.pathname === '/api/enrollments/history' && method === 'GET') {
     if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden consultar historial de matrículas.' })
     const records = await db.all(`SELECT se.id, se.student_id AS "studentId", st.full_name AS "studentName", st.document, se.document_number AS "documentNumber",
-      st.grade, se.course_id AS "courseId", c.name AS "courseName", se.academic_year AS "academicYear",
+      COALESCE(c.grade, st.grade) AS grade, se.course_id AS "courseId", c.name AS "courseName", se.academic_year AS "academicYear",
       se.status, se.start_date AS "startDate", se.end_date AS "endDate", se.notes
       FROM student_enrollments se JOIN students st ON st.id = se.student_id
-      LEFT JOIN courses c ON c.id = se.course_id
+      LEFT JOIN courses c ON c.id = se.course_id AND c.school_id = se.school_id
       WHERE se.school_id = ? ORDER BY se.academic_year DESC, st.full_name, se.start_date DESC LIMIT 1000`, user.school_id)
     return json(response, 200, { records })
   }
@@ -3996,7 +4003,7 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     if (!current) return json(response, 404, { error: 'No encontramos una matrícula activa para trasladar.' })
     const destination = await db.get(`SELECT id, grade, academic_year AS "academicYear" FROM courses
       WHERE id = ? AND school_id = ? AND is_active = 1`, destinationCourseId, user.school_id)
-    if (!destination || destination.academicYear !== current.academicYear) return json(response, 400, { error: 'El curso destino debe estar activo y pertenecer al mismo año lectivo.' })
+    if (!destination || academicYearStart(destination.academicYear) !== academicYearStart(current.academicYear)) return json(response, 400, { error: 'El curso destino debe estar activo y pertenecer al mismo año lectivo.' })
     if (destination.id === current.courseId) return json(response, 400, { error: 'Selecciona un curso distinto al actual.' })
     const newEnrollmentId = randomUUID()
     const documentNumber = await db.transaction(async tx => {
@@ -4015,6 +4022,57 @@ if (url.pathname === '/api/communications/options' && method === 'GET') {
     const linkedAccounts = await db.all('SELECT user_id AS id FROM user_students WHERE student_id = ?', current.studentId)
     await sendEmailToUsers(user.school_id, linkedAccounts.map(item => item.id), 'Cambio de curso o sede', `${studentName} fue trasladado a otro curso dentro del año lectivo ${current.academicYear}.\nNuevo grado: ${destination.grade}.\nIngresa a EDUCA para consultar la trayectoria académica actualizada.`)
     return json(response, 200, { enrollmentId: newEnrollmentId, documentNumber, transferred: true })
+  }
+  const enrollmentPromotionMatch = url.pathname.match(/^\/api\/enrollments\/history\/([0-9a-f-]{36})\/promote$/i)
+  if (enrollmentPromotionMatch && method === 'POST') {
+    if (!['admin', 'rectoria', 'secretaria'].includes(user.role)) return json(response, 403, { error: 'Solo administración, rectoría y secretaría pueden promover estudiantes.' })
+    const body = await readBody(request)
+    const destinationCourseId = String(body.courseId || '')
+    const effectiveDate = String(body.effectiveDate || '')
+    const notes = String(body.notes || '').trim()
+    if (!validDate(effectiveDate) || notes.length > 1000) return json(response, 400, { error: 'Indica una fecha válida y una observación de máximo 1000 caracteres.' })
+    const current = await db.get(`SELECT se.id, se.student_id AS "studentId", se.course_id AS "courseId", se.academic_year AS "academicYear",
+        st.grade AS "studentGrade", st.full_name AS "studentName", COALESCE(c.grade, st.grade) AS "currentGrade"
+      FROM student_enrollments se JOIN students st ON st.id = se.student_id LEFT JOIN courses c ON c.id = se.course_id AND c.school_id = se.school_id
+      WHERE se.id = ? AND se.school_id = ? AND se.status = 'Activa'`, enrollmentPromotionMatch[1], user.school_id)
+    if (!current) return json(response, 404, { error: 'No encontramos una matrícula activa para promover.' })
+    const destination = await db.get(`SELECT id, grade, academic_year AS "academicYear" FROM courses
+      WHERE id = ? AND school_id = ? AND is_active = 1`, destinationCourseId, user.school_id)
+    const currentYear = Number(academicYearStart(current.academicYear))
+    const nextYear = String(currentYear + 1)
+    if (!destination || academicYearStart(destination.academicYear) !== nextYear) return json(response, 400, { error: 'El curso destino debe estar activo y pertenecer al año lectivo siguiente.' })
+    const currentGradeRank = schoolGradeRank(current.currentGrade)
+    const destinationGradeRank = schoolGradeRank(destination.grade)
+    if (String(destination.grade || '').trim().toLocaleLowerCase('es') === String(current.currentGrade || '').trim().toLocaleLowerCase('es') || (currentGradeRank !== null && destinationGradeRank !== null && destinationGradeRank !== currentGradeRank + 1)) return json(response, 400, { error: 'Selecciona el grado inmediatamente siguiente al grado actual.' })
+    const existingNextEnrollment = await db.get(`SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'`, user.school_id, current.studentId, destination.academicYear)
+    if (existingNextEnrollment) return json(response, 409, { error: 'El estudiante ya tiene una matrícula activa para ese año lectivo.' })
+    const newEnrollmentId = randomUUID()
+    const documentNumber = await db.transaction(async tx => {
+      const stillActive = await tx.get("SELECT id FROM student_enrollments WHERE id = ? AND school_id = ? AND status = 'Activa'", current.id, user.school_id)
+      if (!stillActive) throw Object.assign(new Error('La matrícula ya no está activa. Actualiza la página e inténtalo de nuevo.'), { status: 409 })
+      const duplicateNextEnrollment = await tx.get("SELECT id FROM student_enrollments WHERE school_id = ? AND student_id = ? AND academic_year = ? AND status = 'Activa'", user.school_id, current.studentId, destination.academicYear)
+      if (duplicateNextEnrollment) throw Object.assign(new Error('El estudiante ya tiene una matrícula activa para ese año lectivo.'), { status: 409 })
+      const existingResult = await tx.get('SELECT id FROM student_promotion_results WHERE school_id = ? AND student_id = ? AND academic_year = ?', user.school_id, current.studentId, String(currentYear))
+      const resultId = existingResult?.id || randomUUID()
+      const promotionNote = [`Promovido a ${destination.grade}.`, notes].filter(Boolean).join(' ')
+      await tx.run(`UPDATE student_enrollments SET status = 'Retirada', end_date = ?, notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END WHERE id = ? AND school_id = ?`, effectiveDate, promotionNote, promotionNote, current.id, user.school_id)
+      await tx.run("UPDATE document_control_registry SET status = 'Promovido' WHERE school_id = ? AND document_type = 'MAT' AND reference_id = ?", user.school_id, current.id)
+      const controlledNumber = await nextDocumentNumber(tx, user.school_id, 'MAT', destination.academicYear)
+      await tx.run(`INSERT INTO student_enrollments (id, school_id, student_id, course_id, academic_year, document_number, status, start_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`, newEnrollmentId, user.school_id, current.studentId, destination.id, destination.academicYear, controlledNumber, effectiveDate, notes, user.id)
+      await registerControlledDocument(tx, { schoolId: user.school_id, documentType: 'MAT', documentNumber: controlledNumber, referenceId: newEnrollmentId, studentId: current.studentId, studentName: current.studentName, academicYear: destination.academicYear, status: 'Activa', createdBy: user.id })
+      await tx.run('UPDATE students SET grade = ? WHERE id = ? AND school_id = ?', destination.grade, current.studentId, user.school_id)
+      if (existingResult) {
+        await tx.run("UPDATE student_promotion_results SET current_grade = ?, result_status = 'Promovido', new_grade = ?, source_reference = ?, created_by = ?, created_at = CURRENT_TIMESTAMP WHERE id = ? AND school_id = ?", current.currentGrade, destination.grade, 'Promoción registrada en EDUCA', user.id, resultId, user.school_id)
+      } else {
+        await tx.run("INSERT INTO student_promotion_results (id, school_id, student_id, academic_year, current_grade, result_status, new_grade, source_reference, created_by) VALUES (?, ?, ?, ?, ?, 'Promovido', ?, ?, ?)", resultId, user.school_id, current.studentId, String(currentYear), current.currentGrade, destination.grade, 'Promoción registrada en EDUCA', user.id)
+      }
+      return controlledNumber
+    })
+    await logAudit(user.school_id, user.id, 'student_promoted')
+    const linkedAccounts = await db.all('SELECT user_id AS id FROM user_students WHERE student_id = ?', current.studentId)
+    await sendEmailToUsers(user.school_id, linkedAccounts.map(item => item.id), 'Promoción de grado', `${current.studentName} fue promovido de ${current.currentGrade} a ${destination.grade} para el año lectivo ${destination.academicYear}.\nNúmero de control: ${documentNumber}.\nIngresa a EDUCA para consultar la trayectoria académica actualizada.`)
+    return json(response, 200, { enrollmentId: newEnrollmentId, studentId: current.studentId, documentNumber, promoted: true, newGrade: destination.grade, academicYear: destination.academicYear })
   }
 
   if (url.pathname === '/api/students' && method === 'GET') {
