@@ -16,7 +16,7 @@ import { LEGAL_TERMS_VERSION, LegalDocumentPage, TermsAcceptanceDialog } from '.
 import { queueOfflineSubmission, getOfflineSubmissions, deleteOfflineSubmission } from './offline-work-queue.js'
 
 const navGroups = [
-  { title: 'Inicio', icon: LayoutDashboard, items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Mi perfil', icon: UserRound }, { label: 'Mensajería', icon: Mail }, { label: 'Notificaciones', icon: Bell }, { label: 'Ayuda y capacitación', icon: BookOpen }] },
+  { title: 'Inicio', icon: LayoutDashboard, items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Mi perfil', icon: UserRound }, { label: 'Notificaciones', icon: Bell }, { label: 'Ayuda y capacitación', icon: BookOpen }] },
   { title: 'Gestión escolar', icon: GraduationCap, items: [
     { label: 'Estudiantes y matrículas', icon: Users, modules: [{ label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }] },
     { label: 'Asistencia', icon: CalendarDays, modules: [{ label: 'Asistencia', icon: CalendarDays }, { label: 'Justificaciones', icon: Check }] },
