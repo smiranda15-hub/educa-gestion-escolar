@@ -1,6 +1,8 @@
 node_modules/
 dist/
 artifacts/*.apk
+artifacts/windows/
+release/
 data/
 .env
 .env.*

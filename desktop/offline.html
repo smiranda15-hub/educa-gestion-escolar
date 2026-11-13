@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>EDUCA | Sin conexión</title>
+    <style>
+      :root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #17344b; background: #f3f7f8; }
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; }
+      main { width: min(520px, 100%); padding: 38px; border: 1px solid #dce6eb; border-radius: 22px; background: white; box-shadow: 0 18px 60px #18364b12; }
+      .mark { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; background: #e8f3f4; color: #236b7b; font-weight: 800; font-size: 23px; }
+      h1 { margin: 24px 0 10px; font-size: clamp(25px, 5vw, 32px); }
+      p { color: #647b8d; line-height: 1.65; }
+      button { min-height: 48px; margin-top: 12px; padding: 0 20px; border: 0; border-radius: 11px; background: #245e83; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+      button:focus-visible { outline: 3px solid #69c9bd; outline-offset: 3px; }
+      @media (max-width: 480px) { main { padding: 26px 22px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark" aria-hidden="true">E</div>
+      <h1>No pudimos conectar con EDUCA</h1>
+      <p>Revisa tu conexión a internet. Tus datos permanecen en el servidor del colegio; vuelve a intentar cuando tengas conexión.</p>
+      <button id="retry" type="button">Intentar de nuevo</button>
+    </main>
+    <script src="offline.js"></script>
+  </body>
+</html>

@@ -864,3 +864,54 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .event-attendance-records > div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem .6rem; border-bottom: 1px solid #e4ebef; }
 .event-qr-camera { width: min(100%, 440px); aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: #102a3b; }
 @media (max-width: 640px) { .event-attendance-tools > button { flex: 1 1 100%; min-height: 44px; } .event-attendance-records > div { flex-direction: column; gap: .2rem; } }
+
+/* Adaptación global de pantallas estrechas: cada módulo conserva su diseño y desplaza
+   sus propios elementos anchos, en vez de ensanchar toda la página. */
+@media (max-width: 850px) {
+  html, body, #root, .app-shell, .main-area { width: 100%; min-width: 0; max-width: 100%; }
+  body { overflow-x: hidden; }
+  .main-area { overflow-x: clip; }
+  .content-wrap { min-width: 0; max-width: 100%; }
+  .content-wrap > *, .panel, .card, .page-header, .welcome-row,
+  .welcome-actions, .form-grid, .field-grid, .stats-grid, .main-grid,
+  .bottom-grid, .quick-grid, .activity-grid, .course-grid,
+  .school-site-fields, .school-site-photo-form, .school-site-event-form { min-width: 0; }
+  .table-wrap, [class*="table-wrap"], .table-responsive,
+  .report-card-document:has(.report-card-grade-grid) {
+    max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .table-wrap table, [class*="table-wrap"] table, .table-responsive table { min-width: 620px; }
+  img, video, iframe { max-width: 100%; }
+  input, select, textarea { max-width: 100%; }
+  .modal, [role="dialog"], .dialog, .modal-content { max-width: calc(100vw - 20px); }
+  .modal-dialog, [role="dialog"] { max-height: calc(100dvh - 20px); }
+  .modal-body, .dialog-body { max-height: calc(100dvh - 170px); overflow-y: auto; overscroll-behavior: contain; }
+}
+
+@media (max-width: 680px) {
+  .content-wrap { padding-top: 18px; padding-bottom: max(22px, var(--edu-safe-bottom, 0px)); }
+  .content-wrap h1 { font-size: clamp(1.45rem, 6vw, 1.9rem); line-height: 1.2; overflow-wrap: anywhere; }
+  .content-wrap h2 { line-height: 1.28; }
+  .content-wrap p, .content-wrap label, .content-wrap td, .content-wrap th { line-height: 1.5; }
+  .content-wrap :is(input, select, textarea, button, .button) { font-size: max(16px, 1em); }
+  .content-wrap :is(button, .button, a.button) { min-height: 44px; }
+  .content-wrap :is(.filters, .toolbar, .section-toolbar, .form-actions, .dialog-actions) { flex-wrap: wrap; gap: 9px; }
+  .content-wrap :is(.filters, .toolbar, .section-toolbar) > :is(input, select) { flex: 1 1 150px; min-width: 0; }
+  .content-wrap :is(.form-grid, .field-grid, .school-site-fields, .school-site-photo-form, .school-site-event-form) { grid-template-columns: minmax(0, 1fr); }
+  .content-wrap :is(.form-grid, .field-grid) > * { min-width: 0; }
+  .content-wrap :is(.modal, [role="dialog"], .dialog) { width: calc(100vw - 16px); margin-inline: auto; }
+  .content-wrap :is(.panel, .card, .school-site-editor-card) { border-radius: 14px; }
+  .school-site-event-list > article { min-width: 0; }
+}
+
+@media (max-width: 400px) {
+  .content-wrap { padding-left: max(10px, var(--edu-safe-left, 0px)); padding-right: max(10px, var(--edu-safe-right, 0px)); }
+  .topbar { padding-left: max(10px, var(--edu-safe-left, 0px)); padding-right: max(10px, var(--edu-safe-right, 0px)); }
+  .content-wrap :is(.dialog-actions, .document-source-actions) > button { flex: 1 1 100%; }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .sidebar { max-height: 100dvh; overflow-y: auto; }
+  .modal, [role="dialog"], .dialog { max-height: calc(100dvh - 12px); overflow-y: auto; }
+}
