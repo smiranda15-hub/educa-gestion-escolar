@@ -17,11 +17,21 @@ import { queueOfflineSubmission, getOfflineSubmissions, deleteOfflineSubmission 
 
 const navGroups = [
   { title: 'Inicio', icon: LayoutDashboard, items: [{ label: 'Resumen', icon: LayoutDashboard }, { label: 'Mi perfil', icon: UserRound }, { label: 'Mensajería', icon: Mail }, { label: 'Notificaciones', icon: Bell }, { label: 'Ayuda y capacitación', icon: BookOpen }] },
-  { title: 'Vida escolar', icon: CalendarDays, items: [{ label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Justificaciones', icon: Check }, { label: 'Calendario', icon: CalendarDays }, { label: 'Actividades y eventos', icon: PartyPopper }, { label: 'Encuestas y votaciones', icon: ClipboardCheck }, { label: 'Horario', icon: Clock3 }] },
-  { title: 'Académico', icon: GraduationCap, items: [{ label: 'Mis cursos', icon: BookOpen }, { label: 'Cursos y docentes', icon: GraduationCap }, { label: 'Calificaciones', icon: BookOpen }, { label: 'Boletines', icon: FileText }, { label: 'Mi aula', icon: ClipboardCheck }, { label: 'Observador del estudiante', icon: ShieldCheck }, { label: 'Trayectoria académica', icon: History }] },
-  { title: 'Comunidad', icon: Users, items: [{ label: 'Comunicaciones', icon: Bell }, { label: 'Contenido institucional', icon: Building2 }, { label: 'Sitio institucional', icon: Building2 }] },
-  { title: 'Documentos', icon: FileText, items: [{ label: 'Carné digital', icon: IdCard }, { label: 'Certificados y constancias', icon: Award }, { label: 'Control documental', icon: FileText }] },
-  { title: 'Administración', icon: Settings2, items: [{ label: 'Personal, firmas y constancias', icon: PenTool }, { label: 'Usuarios y accesos', icon: LockKeyhole }, { label: 'Solicitudes de contraseña', icon: LockKeyhole }, { label: 'Pagos estudiantiles', icon: CreditCard }, { label: 'Periodos académicos', icon: CalendarDays }, { label: 'Importar estudiantes', icon: Download }, { label: 'Respaldos', icon: Download }, { label: 'Reportes', icon: FileText }, { label: 'Bitácora', icon: History }] },
+  { title: 'Gestión escolar', icon: GraduationCap, items: [
+    { label: 'Estudiantes', icon: Users }, { label: 'Matrículas', icon: ClipboardCheck }, { label: 'Asistencia', icon: CalendarDays }, { label: 'Justificaciones', icon: Check },
+    { label: 'Cursos y docentes', icon: GraduationCap }, { label: 'Mis cursos', icon: BookOpen }, { label: 'Horario', icon: Clock3 }, { label: 'Calificaciones', icon: BookOpen },
+    { label: 'Mi aula', icon: ClipboardCheck }, { label: 'Boletines', icon: FileText }, { label: 'Trayectoria académica', icon: History }, { label: 'Observador del estudiante', icon: ShieldCheck },
+  ] },
+  { title: 'Comunidad y documentos', icon: Users, items: [
+    { label: 'Calendario', icon: CalendarDays }, { label: 'Actividades y eventos', icon: PartyPopper }, { label: 'Encuestas y votaciones', icon: ClipboardCheck },
+    { label: 'Comunicaciones', icon: Bell }, { label: 'Contenido institucional', icon: Building2 }, { label: 'Sitio institucional', icon: Building2 },
+    { label: 'Carné digital', icon: IdCard }, { label: 'Certificados y constancias', icon: Award }, { label: 'Control documental', icon: FileText },
+  ] },
+  { title: 'Administración', icon: Settings2, items: [
+    { label: 'Personal, firmas y constancias', icon: PenTool }, { label: 'Usuarios y accesos', icon: LockKeyhole }, { label: 'Solicitudes de contraseña', icon: LockKeyhole },
+    { label: 'Periodos académicos', icon: CalendarDays }, { label: 'Pagos estudiantiles', icon: CreditCard }, { label: 'Importar estudiantes', icon: Download },
+    { label: 'Reportes', icon: FileText }, { label: 'Respaldos', icon: Download }, { label: 'Bitácora', icon: History },
+  ] },
 ]
 
 const navRoleAccess = {
