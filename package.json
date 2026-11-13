@@ -40,7 +40,7 @@
     "appId": "co.educa.gestionescolar.desktop",
     "productName": "EDUCA Gestión Escolar",
     "directories": {
-      "output": "artifacts/windows"
+      "output": "artifacts/windows-release"
     },
     "files": [
       "desktop/**/*",
@@ -61,7 +61,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "EDUCA Gestión Escolar"
+      "shortcutName": "EDUCA Gestión Escolar",
+      "license": "desktop/terminos-de-uso.txt"
     }
   },
   "allowScripts": {

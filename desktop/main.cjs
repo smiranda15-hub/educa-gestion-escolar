@@ -1,4 +1,5 @@
 const { app, BrowserWindow, shell } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const EDUCA_URL = 'https://educagestionescolar.study/';
@@ -6,6 +7,38 @@ const EDUCA_ORIGIN = new URL(EDUCA_URL).origin;
 
 function showOfflinePage(window) {
   window.loadFile(path.join(__dirname, 'offline.html'));
+}
+
+function getDownloadFolder(filename) {
+  const root = path.join(app.getPath('documents'), 'EDUCA');
+  const normalized = String(filename || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/respaldo|backup|copia-de-seguridad/.test(normalized)) return path.join(root, 'Respaldos');
+  if (/boletin|certificado|constancia|matricula|informe|reporte|\.csv$/.test(normalized)) return path.join(root, 'Informes y documentos');
+  return path.join(root, 'Descargas');
+}
+
+function uniqueDownloadPath(folder, filename) {
+  const safeName = path.basename(filename || 'archivo').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+  const extension = path.extname(safeName);
+  const stem = path.basename(safeName, extension) || 'archivo';
+  let candidate = path.join(folder, safeName);
+  let suffix = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(folder, `${stem} (${suffix++})${extension}`);
+  }
+  return candidate;
+}
+
+function configureDownloads(window) {
+  window.webContents.session.on('will-download', (event, item) => {
+    const folder = getDownloadFolder(item.getFilename());
+    try {
+      fs.mkdirSync(folder, { recursive: true });
+      item.setSavePath(uniqueDownloadPath(folder, item.getFilename()));
+    } catch (error) {
+      console.error('No se pudo preparar la carpeta local de descargas de EDUCA:', error.message);
+    }
+  });
 }
 
 function createWindow() {
@@ -27,6 +60,7 @@ function createWindow() {
   });
 
   window.once('ready-to-show', () => window.show());
+  configureDownloads(window);
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);

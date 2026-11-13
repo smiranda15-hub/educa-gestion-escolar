@@ -1,0 +1,21 @@
+EDUCA - TÉRMINOS DE USO DE LA APLICACIÓN PARA WINDOWS
+Versión 2026-11-03-v1
+
+Al instalar o utilizar EDUCA, usted confirma que está autorizado por su institución educativa para acceder a la plataforma y que usará la aplicación con fines académicos, pedagógicos y administrativos relacionados con la comunidad educativa.
+
+USO RESPETUOSO
+No publique contenido ilegal, ofensivo, discriminatorio, sexualmente explícito o difamatorio, ni material que vulnere los derechos de otras personas. Mantenga un trato respetuoso en comunicaciones, actividades y entregas.
+
+SEGURIDAD DE LA CUENTA
+La contraseña es personal y no debe compartirse. Si sospecha que otra persona utilizó su cuenta, informe de inmediato a la administración de su institución y cambie la contraseña.
+
+USO RESPONSABLE DEL SERVICIO
+No intente acceder a datos ajenos, alterar registros, interferir con el servicio, eludir permisos ni vulnerar sus sistemas. Consulte únicamente la información correspondiente a su rol y autorización.
+
+DATOS PERSONALES Y MENORES DE EDAD
+La institución educativa administra los datos escolares que incorpora a su espacio y debe contar con las autorizaciones que correspondan. Aceptar estos términos no equivale a autorizar el tratamiento de datos personales de un estudiante menor de edad. Consulte la Política de tratamiento de datos personales y los canales de su institución.
+
+ACCESO INSTITUCIONAL
+La institución puede limitar o suspender el acceso cuando la cuenta deje de estar autorizada o se utilice de forma indebida. La aplicación para Windows es un acceso de escritorio al servicio EDUCA y requiere conexión a Internet; no almacena una copia local de la base de datos escolar.
+
+Para consultar los términos vigentes y la política de privacidad, visite https://educagestionescolar.study/terminos y https://educagestionescolar.study/privacidad.
