@@ -1426,3 +1426,10 @@ body { color: var(--edu-ink); background: var(--edu-canvas); }
 @media(max-width:900px) { .help-center-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media(max-width:700px) { .help-guide-list { grid-template-columns: 1fr; } .help-guide-item:nth-child(odd) { border-right: 0; } .help-guide-item-body { padding-left: 53px; } }
 @media(max-width:600px) { .help-center-page { gap: 17px; } .help-center-hero { align-items: flex-start; gap: 12px; padding: 17px; } .help-hero-icon { flex-basis: 44px; height: 44px; border-radius: 13px; } .help-hero-count { display: none; } .help-center-grid,.help-video-grid { grid-template-columns: 1fr; } .help-guide-card { padding: 16px; } .help-guide-card > p { min-height: 0; } .help-section-heading { align-items: flex-start; flex-direction: column; } .help-video-section { padding: 15px; } .help-guide-section > header { padding: 13px 14px; } .help-guide-item summary { padding: 10px 12px; } .help-guide-item-body { padding: 0 14px 15px 49px; } }
+.agenda-hub-page { display: flex; flex-direction: column; gap: 12px; }
+.agenda-hub-tabs { display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%; padding: 5px; border: 1px solid #e0e9ed; border-radius: 12px; background: #f6f9fa; }
+.agenda-hub-tab { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 14px; border: 0; border-radius: 9px; color: #617987; background: transparent; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.agenda-hub-tab:hover { color: #1c596b; background: #edf4f5; }
+.agenda-hub-tab.selected { color: #174b65; background: #fff; box-shadow: 0 2px 7px #173b5512; }
+.agenda-hub-tab.selected svg { color: #16827f; }
+@media(max-width:480px) { .agenda-hub-tabs { width: 100%; } .agenda-hub-tab { flex: 1; gap: 5px; padding-inline: 7px; font-size: 11px; } }
