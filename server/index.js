@@ -476,7 +476,7 @@ async function route(request, response) {
     if (!slug || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json(response, 200, { message: genericMessage })
     const account = await db.get(`SELECT u.id, u.school_id AS "schoolId", u.full_name AS "fullName", u.role
       FROM users u JOIN schools s ON s.id = u.school_id
-      WHERE s.slug = ? AND s.is_active = 1 AND s.archived_at IS NULL AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
+      WHERE LOWER(s.slug) = ? AND s.is_active = 1 AND s.archived_at IS NULL AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL`, slug, email)
     if (!account || !accountRoles.has(account.role)) return json(response, 200, { message: genericMessage })
     const recent = await db.get(`SELECT id FROM password_reset_requests WHERE school_id = ? AND user_id = ?
       AND status IN ('Pendiente','Aprobada') ORDER BY requested_at DESC LIMIT 1`, account.schoolId, account.id)
@@ -538,7 +538,7 @@ async function route(request, response) {
   }
   const publicSchoolLogo = url.pathname.match(/^\/api\/schools\/([a-z0-9-]{1,48})\/logo$/i)
   if (method === 'GET' && publicSchoolLogo) {
-    const logo = await db.get('SELECT logo_content_type AS "contentType", logo_data AS "fileData" FROM schools WHERE slug = ? AND logo_content_type IS NOT NULL', publicSchoolLogo[1].toLowerCase())
+    const logo = await db.get('SELECT logo_content_type AS "contentType", logo_data AS "fileData" FROM schools WHERE LOWER(slug) = ? AND logo_content_type IS NOT NULL', publicSchoolLogo[1].toLowerCase())
     if (!logo) return json(response, 404, { error: 'Logo institucional no encontrado.' })
     response.writeHead(200, { 'Content-Type': logo.contentType, 'Content-Length': String(logo.fileData.length), 'Cache-Control': 'public, max-age=3600', 'X-Content-Type-Options': 'nosniff' })
     response.end(logo.fileData)
@@ -552,7 +552,7 @@ async function route(request, response) {
   const publicSchoolSiteMatch = url.pathname.match(/^\/api\/public\/schools\/([a-z0-9-]{1,48})\/site$/i)
   if (method === 'GET' && publicSchoolSiteMatch) {
     const school = await db.get(`SELECT id, name, slug, contact_email AS "contactEmail", contact_phone AS "contactPhone", address, primary_color AS "primaryColor", logo_content_type AS "logoContentType"
-      FROM schools WHERE slug = ? AND is_active = 1 AND archived_at IS NULL`, publicSchoolSiteMatch[1].toLowerCase())
+      FROM schools WHERE LOWER(slug) = ? AND is_active = 1 AND archived_at IS NULL`, publicSchoolSiteMatch[1].toLowerCase())
     if (!school) return json(response, 404, { error: 'No encontramos el sitio de esta institución.' })
     const saved = await db.get('SELECT content_json AS content FROM school_public_sites WHERE school_id = ?', school.id)
     let content = {}
@@ -714,7 +714,7 @@ async function route(request, response) {
     const user = await db.get(`SELECT u.*, s.name AS school_name, s.slug AS school_slug,
       s.primary_color AS school_primary_color, s.logo_content_type AS school_logo_content_type,
       s.contact_email AS school_contact_email, s.contact_phone AS school_contact_phone, s.address AS school_address FROM users u JOIN schools s ON s.id = u.school_id
-      WHERE s.slug = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL AND s.is_active = 1 AND s.archived_at IS NULL`, slug, email)
+      WHERE LOWER(s.slug) = ? AND u.email = ? AND u.is_active = 1 AND u.deleted_at IS NULL AND s.is_active = 1 AND s.archived_at IS NULL`, slug, email)
     const matched = await verifyPassword(String(body.password || ''), user?.password_hash || '00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000')
     if (!user || !matched) {
       attempts.count += 1
